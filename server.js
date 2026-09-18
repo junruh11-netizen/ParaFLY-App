@@ -34,7 +34,14 @@ CREATE TABLE IF NOT EXISTS parafly_votes (
  id SERIAL PRIMARY KEY, room_id INTEGER NOT NULL REFERENCES parafly_rooms(id) ON DELETE CASCADE,
  student_id INTEGER NOT NULL REFERENCES parafly_students(id) ON DELETE CASCADE, round_index INTEGER NOT NULL,
  response_id INTEGER NOT NULL REFERENCES parafly_responses(id) ON DELETE CASCADE, UNIQUE(student_id, round_index)
-);`);
+);
+ALTER TABLE parafly_rooms ADD COLUMN IF NOT EXISTS feedback_mode TEXT NOT NULL DEFAULT 'class_vote';
+ALTER TABLE parafly_rooms ADD COLUMN IF NOT EXISTS teacher_feedback TEXT NOT NULL DEFAULT '';
+ALTER TABLE parafly_rooms ADD COLUMN IF NOT EXISTS model_response_id INTEGER;
+ALTER TABLE parafly_votes ADD COLUMN IF NOT EXISTS criterion TEXT NOT NULL DEFAULT '';
+`);
+
+const voteCriteria = ["meaning", "wording", "structure", "clarity"];
 
 const one = async (text, params=[]) => (await db.query(text, params)).rows[0];
 const fail = (res, code, error) => res.status(code).json({ error });
@@ -60,12 +67,13 @@ app.post("/api/rooms", async (req,res,next)=>{ try {
   const paragraphs=(Array.isArray(body.paragraphs)?body.paragraphs:[]).map(x=>String(x).trim()).filter(Boolean);
   const seconds=Math.min(600,Math.max(30,Number(body.secondsPerRound)||60));
   const wordLimit=body.wordLimit?Math.min(500,Math.max(5,Number(body.wordLimit))):null;
+  const feedbackMode=body.feedbackMode==="teacher_pick"?"teacher_pick":"class_vote";
   let joinCode=cleanCode(body.joinCode);
-  if(!title||paragraphs.length<1||paragraphs.length>3||paragraphs.some(x=>x.length>5000)) return fail(res,400,"Enter a title and one to three paragraphs");
+  if(!title||paragraphs.length<1||paragraphs.length>10||paragraphs.some(x=>x.length>5000)) return fail(res,400,"Enter a title and one to ten passages");
   if(joinCode.length<3) joinCode=crypto.randomBytes(3).toString("hex").toUpperCase();
   const token=crypto.randomUUID();
-  const result=await one(`INSERT INTO parafly_rooms(title,directions,paragraphs,join_code,teacher_token,seconds_per_round,word_limit)
-    VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING *`,[title,directions,JSON.stringify(paragraphs),joinCode,token,seconds,wordLimit]);
+  const result=await one(`INSERT INTO parafly_rooms(title,directions,paragraphs,join_code,teacher_token,seconds_per_round,word_limit,feedback_mode)
+    VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,[title,directions,JSON.stringify(paragraphs),joinCode,token,seconds,wordLimit,feedbackMode]);
   res.status(201).json({...publicRoom(result),teacherToken:token});
 } catch(e){ if(e.code==="23505") return fail(res,409,"That class code is already in use"); next(e); }});
 
@@ -87,13 +95,17 @@ app.post("/api/rooms/:id/join",async(req,res,next)=>{try{
 app.get("/api/rooms/:id/student",async(req,res,next)=>{try{
   const s=await student(req,res); if(!s)return; const room=await roomById(req.params.id); if(!room)return fail(res,404,"Room expired");
   const mine=(await db.query("SELECT id,round_index,response_text,submitted_at FROM parafly_responses WHERE student_id=$1 ORDER BY round_index",[s.id])).rows;
-  let exemplars=[],results=[];
+  let exemplars=[],results=[],criteria=[];
   if(["voting","results"].includes(room.phase)&&room.current_round>=0){
     exemplars=(await db.query("SELECT id,response_text FROM parafly_responses WHERE room_id=$1 AND round_index=$2 AND id=ANY($3::int[]) ORDER BY id",[room.id,room.current_round,room.selected_ids])).rows;
   }
-  if(room.phase==="results") results=(await db.query(`SELECT response_id,COUNT(*)::int votes FROM parafly_votes WHERE room_id=$1 AND round_index=$2 GROUP BY response_id`,[room.id,room.current_round])).rows;
+  if(room.phase==="results") {
+    results=(await db.query(`SELECT response_id,COUNT(*)::int votes FROM parafly_votes WHERE room_id=$1 AND round_index=$2 GROUP BY response_id`,[room.id,room.current_round])).rows;
+    criteria=(await db.query(`SELECT response_id,criterion,COUNT(*)::int votes FROM parafly_votes WHERE room_id=$1 AND round_index=$2 AND criterion<>'' GROUP BY response_id,criterion`,[room.id,room.current_round])).rows;
+  }
   const myVote=await one("SELECT response_id FROM parafly_votes WHERE student_id=$1 AND round_index=$2",[s.id,room.current_round]);
-  res.json({room:publicRoom(room),student:{id:s.id,nickname:s.nickname},paragraph:room.phase==="writing"?currentParagraph(room):null,mine,exemplars,results,myVote:myVote?.response_id??null});
+  const showParagraph=["writing","review","voting","results"].includes(room.phase);
+  res.json({room:publicRoom(room),student:{id:s.id,nickname:s.nickname},paragraph:showParagraph?currentParagraph(room):null,mine,exemplars,results,criteria,myVote:myVote?.response_id??null,teacherFeedback:room.phase==="results"?room.teacher_feedback:""});
 }catch(e){next(e)}});
 
 app.post("/api/rooms/:id/responses",async(req,res,next)=>{try{
@@ -111,18 +123,20 @@ app.get("/api/rooms/:id/teacher",async(req,res,next)=>{try{
   const students=(await db.query("SELECT id,nickname,joined_at FROM parafly_students WHERE room_id=$1 ORDER BY joined_at",[room.id])).rows;
   const responses=(await db.query("SELECT r.id,r.student_id,r.round_index,r.response_text,r.submitted_at,s.nickname FROM parafly_responses r JOIN parafly_students s ON s.id=r.student_id WHERE r.room_id=$1 ORDER BY r.submitted_at",[room.id])).rows;
   const votes=(await db.query("SELECT response_id,COUNT(*)::int votes FROM parafly_votes WHERE room_id=$1 AND round_index=$2 GROUP BY response_id",[room.id,room.current_round])).rows;
-  res.json({room:{...publicRoom(room),paragraphs:room.paragraphs,selectedIds:room.selected_ids},students,responses,votes});
+  const voteCriteriaRows=(await db.query("SELECT response_id,criterion,COUNT(*)::int votes FROM parafly_votes WHERE room_id=$1 AND round_index=$2 AND criterion<>'' GROUP BY response_id,criterion",[room.id,room.current_round])).rows;
+  res.json({room:{...publicRoom(room),paragraphs:room.paragraphs,selectedIds:room.selected_ids,teacherFeedback:room.teacher_feedback,modelResponseId:room.model_response_id},students,responses,votes,voteCriteria:voteCriteriaRows});
 }catch(e){next(e)}});
 
 app.patch("/api/rooms/:id/control",async(req,res,next)=>{try{
   const room=await teacher(req,res);if(!room)return;const body=bodyOf(req),action=body.action;
-  let phase=room.phase,round=room.current_round,endsAt=room.ends_at,selected=room.selected_ids;
-  if(action==="start") { if(phase!=="lobby")return fail(res,409,"The activity has already started"); round=0; phase="writing"; endsAt=new Date(Date.now()+room.seconds_per_round*1000); selected=[]; }
+  let phase=room.phase,round=room.current_round,endsAt=room.ends_at,selected=room.selected_ids,teacherFeedback=room.teacher_feedback,modelResponseId=room.model_response_id;
+  if(action==="start") { if(phase!=="lobby")return fail(res,409,"The activity has already started"); round=0; phase="writing"; endsAt=new Date(Date.now()+room.seconds_per_round*1000); selected=[];teacherFeedback="";modelResponseId=null; }
   else if(action==="end") { if(phase!=="writing")return fail(res,409,"No writing round is open"); phase="review"; endsAt=null; }
-  else if(action==="reopen") { if(phase!=="review")return fail(res,409,"Only a locked writing round can be reopened"); phase="writing"; endsAt=new Date(Date.now()+room.seconds_per_round*1000); selected=[]; }
-  else if(action==="skip") { if(phase!=="review")return fail(res,409,"Voting can only be skipped during review"); if(round+1>=room.paragraphs.length){phase="complete";endsAt=null;} else {round++;phase="writing";endsAt=new Date(Date.now()+room.seconds_per_round*1000);selected=[];} }
+  else if(action==="reopen") { if(phase!=="review")return fail(res,409,"Only a locked writing round can be reopened"); phase="writing"; endsAt=new Date(Date.now()+room.seconds_per_round*1000); selected=[];teacherFeedback="";modelResponseId=null; }
+  else if(action==="skip") { if(phase!=="review")return fail(res,409,"Feedback can only be skipped during review"); if(round+1>=room.paragraphs.length){phase="complete";endsAt=null;} else {round++;phase="writing";endsAt=new Date(Date.now()+room.seconds_per_round*1000);selected=[];teacherFeedback="";modelResponseId=null;} }
   else if(action==="vote") {
     if(phase!=="review")return fail(res,409,"Responses are not ready for selection");
+    if(room.feedback_mode!=="class_vote")return fail(res,409,"This activity uses Teacher Pick feedback");
     if(!Array.isArray(body.selectedIds))return fail(res,400,"Select two to five responses");
     selected=[...new Set(body.selectedIds.map(Number).filter(Number.isInteger))].slice(0,5);
     if(selected.length<2)return fail(res,400,"Select at least two responses");
@@ -130,18 +144,28 @@ app.patch("/api/rooms/:id/control",async(req,res,next)=>{try{
     if(valid.rowCount!==selected.length)return fail(res,400,"One of those responses is not part of this round");
     phase="voting";
   }
+  else if(action==="teacherResult") {
+    if(phase!=="review"||room.feedback_mode!=="teacher_pick")return fail(res,409,"Teacher feedback is not available now");
+    const responseId=Number(body.responseId),feedback=String(body.feedback??"").trim().slice(0,1000);
+    if(!Number.isInteger(responseId))return fail(res,400,"Choose one model response");
+    const valid=await one("SELECT id FROM parafly_responses WHERE room_id=$1 AND round_index=$2 AND id=$3",[room.id,room.current_round,responseId]);
+    if(!valid)return fail(res,400,"Choose a response from this round");
+    if(feedback.length<3)return fail(res,400,"Explain why this paraphrase works");
+    selected=[responseId];modelResponseId=responseId;teacherFeedback=feedback;phase="results";
+  }
   else if(action==="results") { if(phase!=="voting")return fail(res,409,"Voting is not open"); phase="results"; }
-  else if(action==="next") { if(phase!=="results")return fail(res,409,"Reveal the results before continuing"); if(round+1>=room.paragraphs.length){phase="complete";endsAt=null;} else {round++;phase="writing";endsAt=new Date(Date.now()+room.seconds_per_round*1000);selected=[];} }
+  else if(action==="next") { if(phase!=="results")return fail(res,409,"Reveal the results before continuing"); if(round+1>=room.paragraphs.length){phase="complete";endsAt=null;} else {round++;phase="writing";endsAt=new Date(Date.now()+room.seconds_per_round*1000);selected=[];teacherFeedback="";modelResponseId=null;} }
   else if(action==="addTime") { if(phase!=="writing")return fail(res,409,"No writing round is open"); endsAt=new Date(Math.max(Date.now(),new Date(endsAt).getTime())+30000); }
   else return fail(res,400,"Unknown control");
-  const updated=await one("UPDATE parafly_rooms SET phase=$1,current_round=$2,ends_at=$3,selected_ids=$4 WHERE id=$5 RETURNING *",[phase,round,endsAt,JSON.stringify(selected),room.id]);
+  const updated=await one("UPDATE parafly_rooms SET phase=$1,current_round=$2,ends_at=$3,selected_ids=$4,teacher_feedback=$5,model_response_id=$6 WHERE id=$7 RETURNING *",[phase,round,endsAt,JSON.stringify(selected),teacherFeedback,modelResponseId,room.id]);
   res.json(publicRoom(updated));
 }catch(e){next(e)}});
 
 app.post("/api/rooms/:id/vote",async(req,res,next)=>{try{
-  const s=await student(req,res);if(!s)return;const room=await roomById(req.params.id);const responseId=Number(bodyOf(req).responseId);
+  const s=await student(req,res);if(!s)return;const room=await roomById(req.params.id),body=bodyOf(req),responseId=Number(body.responseId),criterion=String(body.criterion??"");
   if(!room||room.phase!=="voting"||!room.selected_ids.includes(responseId))return fail(res,409,"Voting is closed");
-  await db.query("INSERT INTO parafly_votes(room_id,student_id,round_index,response_id) VALUES($1,$2,$3,$4) ON CONFLICT(student_id,round_index) DO UPDATE SET response_id=EXCLUDED.response_id",[room.id,s.id,room.current_round,responseId]);res.json({ok:true});
+  if(!voteCriteria.includes(criterion))return fail(res,400,"Choose why this paraphrase is strongest");
+  await db.query("INSERT INTO parafly_votes(room_id,student_id,round_index,response_id,criterion) VALUES($1,$2,$3,$4,$5) ON CONFLICT(student_id,round_index) DO UPDATE SET response_id=EXCLUDED.response_id,criterion=EXCLUDED.criterion",[room.id,s.id,room.current_round,responseId,criterion]);res.json({ok:true});
 }catch(e){next(e)}});
 
 app.get("/api/rooms/:id/export",async(req,res,next)=>{try{const room=await teacher(req,res);if(!room)return;

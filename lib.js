@@ -20,6 +20,7 @@ export function publicRoom(room) {
     secondsPerRound: room.seconds_per_round,
     wordLimit: room.word_limit,
     endsAt: room.ends_at,
+    feedbackMode: room.feedback_mode || "class_vote",
   };
 }
 
