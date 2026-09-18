@@ -44,7 +44,7 @@ async function teacherPage(id){const session=store.get("parafly-teacher");if(!se
  const draw=()=>{const {room:r,students,responses,votes}=current;const roundResponses=responses.filter(x=>x.round_index===r.currentRound);const submitted=new Set(roundResponses.map(x=>x.student_id));
   let controls=r.phase==="lobby"?`<button class="btn orange" data-action="start">Launch paragraph 1</button>`:"";
   if(r.phase==="writing")controls=`<button class="btn secondary" data-action="addTime">+30 seconds</button><button class="btn orange" data-action="end">End round</button>`;
-  if(r.phase==="review")controls=`<button class="btn green" id="openVote">Open vote with selected responses</button>`;
+  if(r.phase==="review")controls=`<button class="btn secondary" data-action="reopen">Reopen writing</button><button class="btn secondary" data-action="skip">${r.currentRound+1>=r.paragraphCount?"Skip voting & finish":"Skip voting & next paragraph"}</button><button class="btn green" id="openVote">Open vote with selected responses</button>`;
   if(r.phase==="voting")controls=`<button class="btn orange" data-action="results">Reveal results</button>`;
   if(r.phase==="results")controls=`<button class="btn orange" data-action="next">${r.currentRound+1>=r.paragraphCount?"Finish ParaFLY":"Launch next paragraph"}</button>`;
   const responseList=r.phase==="review"?`<div class="card"><h2>Select 2–5 anonymous examples</h2>${roundResponses.length?roundResponses.map((x,i)=>`<div class="response ${r.selectedIds.includes(x.id)?"selected":""}"><label><input type="checkbox" name="pick" value="${x.id}"><span><b>Response ${i+1}</b><br>${esc(x.response_text)}</span></label></div>`).join(""):"<p>No responses were submitted.</p>"}</div>`:"";
