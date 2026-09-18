@@ -38,6 +38,8 @@ CREATE TABLE IF NOT EXISTS parafly_votes (
 
 const one = async (text, params=[]) => (await db.query(text, params)).rows[0];
 const fail = (res, code, error) => res.status(code).json({ error });
+const bodyOf = req => req.body && typeof req.body === "object" && !Array.isArray(req.body) ? req.body : {};
+app.param("id", (req, res, next, id) => /^\d+$/.test(id) ? next() : fail(res, 400, "Invalid room"));
 async function roomById(id) { return one("SELECT * FROM parafly_rooms WHERE id=$1 AND expires_at>NOW()", [id]); }
 async function teacher(req, res) {
   const room = await one("SELECT * FROM parafly_rooms WHERE id=$1 AND teacher_token=$2 AND expires_at>NOW()", [req.params.id, req.header("x-teacher-token")]);
@@ -52,12 +54,13 @@ async function student(req, res) {
 
 app.get("/api/health", (_req,res)=>res.json({status:"ok"}));
 app.post("/api/rooms", async (req,res,next)=>{ try {
-  const title=String(req.body.title??"").trim().slice(0,120);
-  const directions=String(req.body.directions??"").trim().slice(0,500);
-  const paragraphs=(Array.isArray(req.body.paragraphs)?req.body.paragraphs:[]).map(x=>String(x).trim()).filter(Boolean);
-  const seconds=Math.min(600,Math.max(30,Number(req.body.secondsPerRound)||60));
-  const wordLimit=req.body.wordLimit?Math.min(500,Math.max(5,Number(req.body.wordLimit))):null;
-  let joinCode=cleanCode(req.body.joinCode);
+  const body=bodyOf(req);
+  const title=String(body.title??"").trim().slice(0,120);
+  const directions=String(body.directions??"").trim().slice(0,500);
+  const paragraphs=(Array.isArray(body.paragraphs)?body.paragraphs:[]).map(x=>String(x).trim()).filter(Boolean);
+  const seconds=Math.min(600,Math.max(30,Number(body.secondsPerRound)||60));
+  const wordLimit=body.wordLimit?Math.min(500,Math.max(5,Number(body.wordLimit))):null;
+  let joinCode=cleanCode(body.joinCode);
   if(!title||paragraphs.length<1||paragraphs.length>3||paragraphs.some(x=>x.length>5000)) return fail(res,400,"Enter a title and one to three paragraphs");
   if(joinCode.length<3) joinCode=crypto.randomBytes(3).toString("hex").toUpperCase();
   const token=crypto.randomUUID();
@@ -73,7 +76,9 @@ app.get("/api/rooms/code/:code",async(req,res,next)=>{try{
 
 app.post("/api/rooms/:id/join",async(req,res,next)=>{try{
   const room=await roomById(req.params.id); if(!room||room.phase==="complete")return fail(res,404,"This class is unavailable");
-  const nickname=cleanNickname(req.body.nickname); if(nickname.length<1)return fail(res,400,"Enter your classroom nickname");
+  const nickname=cleanNickname(bodyOf(req).nickname); if(nickname.length<1)return fail(res,400,"Enter your classroom nickname");
+  const duplicate=await one("SELECT id FROM parafly_students WHERE room_id=$1 AND LOWER(nickname)=LOWER($2)",[room.id,nickname]);
+  if(duplicate)return fail(res,409,"That nickname is already in use");
   const token=crypto.randomUUID();
   const s=await one("INSERT INTO parafly_students(room_id,nickname,token) VALUES($1,$2,$3) RETURNING id,nickname",[room.id,nickname,token]);
   res.status(201).json({...s,roomId:room.id,token});
@@ -94,7 +99,7 @@ app.get("/api/rooms/:id/student",async(req,res,next)=>{try{
 app.post("/api/rooms/:id/responses",async(req,res,next)=>{try{
   const s=await student(req,res);if(!s)return;const room=await roomById(req.params.id);
   if(!room||room.phase!=="writing"||room.current_round<0)return fail(res,409,"This writing round is closed");
-  const text=String(req.body.response??"").trim();if(text.length<3||text.length>5000)return fail(res,400,"Write your paraphrase before submitting");
+  const text=String(bodyOf(req).response??"").trim();if(text.length<3||text.length>5000)return fail(res,400,"Write your paraphrase before submitting");
   if(room.word_limit&&text.split(/\s+/).length>room.word_limit)return fail(res,400,`Stay within ${room.word_limit} words`);
   await db.query(`INSERT INTO parafly_responses(room_id,student_id,round_index,response_text) VALUES($1,$2,$3,$4)
     ON CONFLICT(student_id,round_index) DO UPDATE SET response_text=EXCLUDED.response_text,submitted_at=NOW()`,[room.id,s.id,room.current_round,text]);
@@ -110,19 +115,21 @@ app.get("/api/rooms/:id/teacher",async(req,res,next)=>{try{
 }catch(e){next(e)}});
 
 app.patch("/api/rooms/:id/control",async(req,res,next)=>{try{
-  const room=await teacher(req,res);if(!room)return;const action=req.body.action;
+  const room=await teacher(req,res);if(!room)return;const body=bodyOf(req),action=body.action;
   let phase=room.phase,round=room.current_round,endsAt=room.ends_at,selected=room.selected_ids;
-  if(action==="start") { round=round<0?0:round; phase="writing"; endsAt=new Date(Date.now()+room.seconds_per_round*1000); selected=[]; }
+  if(action==="start") { if(phase!=="lobby")return fail(res,409,"The activity has already started"); round=0; phase="writing"; endsAt=new Date(Date.now()+room.seconds_per_round*1000); selected=[]; }
   else if(action==="end") { if(phase!=="writing")return fail(res,409,"No writing round is open"); phase="review"; endsAt=null; }
   else if(action==="vote") {
-    selected=[...new Set((req.body.selectedIds??[]).map(Number).filter(Number.isInteger))].slice(0,5);
+    if(phase!=="review")return fail(res,409,"Responses are not ready for selection");
+    if(!Array.isArray(body.selectedIds))return fail(res,400,"Select two to five responses");
+    selected=[...new Set(body.selectedIds.map(Number).filter(Number.isInteger))].slice(0,5);
     if(selected.length<2)return fail(res,400,"Select at least two responses");
     const valid=await db.query("SELECT id FROM parafly_responses WHERE room_id=$1 AND round_index=$2 AND id=ANY($3::int[])",[room.id,room.current_round,selected]);
     if(valid.rowCount!==selected.length)return fail(res,400,"One of those responses is not part of this round");
     phase="voting";
   }
   else if(action==="results") { if(phase!=="voting")return fail(res,409,"Voting is not open"); phase="results"; }
-  else if(action==="next") { if(round+1>=room.paragraphs.length){phase="complete";endsAt=null;} else {round++;phase="writing";endsAt=new Date(Date.now()+room.seconds_per_round*1000);selected=[];} }
+  else if(action==="next") { if(phase!=="results")return fail(res,409,"Reveal the results before continuing"); if(round+1>=room.paragraphs.length){phase="complete";endsAt=null;} else {round++;phase="writing";endsAt=new Date(Date.now()+room.seconds_per_round*1000);selected=[];} }
   else if(action==="addTime") { if(phase!=="writing")return fail(res,409,"No writing round is open"); endsAt=new Date(Math.max(Date.now(),new Date(endsAt).getTime())+30000); }
   else return fail(res,400,"Unknown control");
   const updated=await one("UPDATE parafly_rooms SET phase=$1,current_round=$2,ends_at=$3,selected_ids=$4 WHERE id=$5 RETURNING *",[phase,round,endsAt,JSON.stringify(selected),room.id]);
@@ -130,7 +137,7 @@ app.patch("/api/rooms/:id/control",async(req,res,next)=>{try{
 }catch(e){next(e)}});
 
 app.post("/api/rooms/:id/vote",async(req,res,next)=>{try{
-  const s=await student(req,res);if(!s)return;const room=await roomById(req.params.id);const responseId=Number(req.body.responseId);
+  const s=await student(req,res);if(!s)return;const room=await roomById(req.params.id);const responseId=Number(bodyOf(req).responseId);
   if(!room||room.phase!=="voting"||!room.selected_ids.includes(responseId))return fail(res,409,"Voting is closed");
   await db.query("INSERT INTO parafly_votes(room_id,student_id,round_index,response_id) VALUES($1,$2,$3,$4) ON CONFLICT(student_id,round_index) DO UPDATE SET response_id=EXCLUDED.response_id",[room.id,s.id,room.current_round,responseId]);res.json({ok:true});
 }catch(e){next(e)}});
@@ -141,6 +148,6 @@ app.get("/api/rooms/:id/export",async(req,res,next)=>{try{const room=await teach
   res.type("text/csv").attachment("parafly-responses.csv").send(csv);
 }catch(e){next(e)}});
 
-app.use((err,_req,res,_next)=>{console.error(err);res.status(500).json({error:"Something went wrong"})});
+app.use((err,_req,res,_next)=>{if(err?.type==="entity.parse.failed")return res.status(400).json({error:"Invalid JSON request"});console.error(err);res.status(500).json({error:"Something went wrong"})});
 app.get("/{*splat}",(_req,res)=>res.sendFile(new URL("./public/index.html",import.meta.url).pathname));
 app.listen(port,()=>console.log(`ParaFLY listening on ${port}`));
