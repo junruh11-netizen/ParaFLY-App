@@ -119,6 +119,8 @@ app.patch("/api/rooms/:id/control",async(req,res,next)=>{try{
   let phase=room.phase,round=room.current_round,endsAt=room.ends_at,selected=room.selected_ids;
   if(action==="start") { if(phase!=="lobby")return fail(res,409,"The activity has already started"); round=0; phase="writing"; endsAt=new Date(Date.now()+room.seconds_per_round*1000); selected=[]; }
   else if(action==="end") { if(phase!=="writing")return fail(res,409,"No writing round is open"); phase="review"; endsAt=null; }
+  else if(action==="reopen") { if(phase!=="review")return fail(res,409,"Only a locked writing round can be reopened"); phase="writing"; endsAt=new Date(Date.now()+room.seconds_per_round*1000); selected=[]; }
+  else if(action==="skip") { if(phase!=="review")return fail(res,409,"Voting can only be skipped during review"); if(round+1>=room.paragraphs.length){phase="complete";endsAt=null;} else {round++;phase="writing";endsAt=new Date(Date.now()+room.seconds_per_round*1000);selected=[];} }
   else if(action==="vote") {
     if(phase!=="review")return fail(res,409,"Responses are not ready for selection");
     if(!Array.isArray(body.selectedIds))return fail(res,400,"Select two to five responses");
