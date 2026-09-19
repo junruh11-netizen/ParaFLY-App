@@ -28,3 +28,9 @@ export function publicRoom(room) {
 export function currentParagraph(room) {
   return room.current_round >= 0 ? room.paragraphs[room.current_round] : null;
 }
+
+export function csvCell(value) {
+  const text = String(value ?? "");
+  const safe = /^\s*[=+\-@]/.test(text) ? `'${text}` : text;
+  return `"${safe.replaceAll('"', '""')}"`;
+}

@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import express from "express";
 import pg from "pg";
-import { cleanCode, cleanNickname, currentParagraph, phases, publicRoom } from "./lib.js";
+import { cleanCode, cleanNickname, csvCell, currentParagraph, phases, publicRoom } from "./lib.js";
 
 const { Pool } = pg;
 const app = express();
@@ -41,10 +41,16 @@ CREATE TABLE IF NOT EXISTS parafly_summaries (
  summary_text TEXT NOT NULL, ai_status TEXT NOT NULL DEFAULT 'not_used', ai_fact_count INTEGER,
  ai_feedback JSONB NOT NULL DEFAULT '{}', submitted_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), UNIQUE(student_id)
 );
+CREATE TABLE IF NOT EXISTS parafly_ai_usage (
+ student_id INTEGER PRIMARY KEY REFERENCES parafly_students(id) ON DELETE CASCADE,
+ room_id INTEGER NOT NULL REFERENCES parafly_rooms(id) ON DELETE CASCADE,
+ checks INTEGER NOT NULL DEFAULT 0, last_checked_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
 ALTER TABLE parafly_rooms ADD COLUMN IF NOT EXISTS feedback_mode TEXT NOT NULL DEFAULT 'class_vote';
 ALTER TABLE parafly_rooms ADD COLUMN IF NOT EXISTS teacher_feedback TEXT NOT NULL DEFAULT '';
 ALTER TABLE parafly_rooms ADD COLUMN IF NOT EXISTS model_response_id INTEGER;
 ALTER TABLE parafly_rooms ADD COLUMN IF NOT EXISTS ai_fact_check BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE parafly_rooms ADD COLUMN IF NOT EXISTS ai_check_count INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE parafly_votes ADD COLUMN IF NOT EXISTS criterion TEXT NOT NULL DEFAULT '';
 ALTER TABLE parafly_summaries ADD COLUMN IF NOT EXISTS ai_status TEXT NOT NULL DEFAULT 'not_used';
 ALTER TABLE parafly_summaries ADD COLUMN IF NOT EXISTS ai_fact_count INTEGER;
@@ -70,7 +76,7 @@ async function checkFacts(paragraphs, summary) {
   })});
   if(!response.ok)throw Error(`AI fact check failed (${response.status})`);
   const data=await response.json(),text=responseText(data);if(!text)throw Error("AI fact check returned no result");
-  const result=JSON.parse(text);result.meetsThreeFactGoal=result.supportedFactCount>=3&&result.meetsThreeFactGoal===true;return result;
+  const result=JSON.parse(text);result.meetsThreeFactGoal=result.supportedFactCount>=3&&result.meetsThreeFactGoal===true&&result.unsupportedClaims.length===0;return result;
 }
 app.param("id", (req, res, next, id) => /^\d+$/.test(id) ? next() : fail(res, 400, "Invalid room"));
 async function roomById(id) { return one("SELECT * FROM parafly_rooms WHERE id=$1 AND expires_at>NOW()", [id]); }
@@ -114,6 +120,8 @@ app.get("/api/rooms/code/:code",async(req,res,next)=>{try{
 app.post("/api/rooms/:id/join",async(req,res,next)=>{try{
   const room=await roomById(req.params.id); if(!room||room.phase==="complete")return fail(res,404,"This class is unavailable");
   const nickname=cleanNickname(bodyOf(req).nickname); if(nickname.length<1)return fail(res,400,"Enter your classroom nickname");
+  const classSize=await one("SELECT COUNT(*)::int count FROM parafly_students WHERE room_id=$1",[room.id]);
+  if(classSize.count>=100)return fail(res,409,"This class has reached its 100-student limit");
   const duplicate=await one("SELECT id FROM parafly_students WHERE room_id=$1 AND LOWER(nickname)=LOWER($2)",[room.id,nickname]);
   if(duplicate)return fail(res,409,"That nickname is already in use");
   const token=crypto.randomUUID();
@@ -156,6 +164,11 @@ app.post("/api/rooms/:id/summary",async(req,res,next)=>{try{
   if(text.length<20||text.length>5000)return fail(res,400,"Write a complete summary containing at least three facts");
   let aiStatus="not_used",aiFactCount=null,aiFeedback={};
   if(room.ai_fact_check){
+    const usage=await one(`INSERT INTO parafly_ai_usage(student_id,room_id,checks) VALUES($1,$2,1)
+      ON CONFLICT(student_id) DO UPDATE SET checks=parafly_ai_usage.checks+1,last_checked_at=NOW() RETURNING checks`,[s.id,room.id]);
+    if(usage.checks>4)return fail(res,429,"AI Fact Check allows four attempts. Ask your teacher for help with the final revision.");
+    const roomUsage=await one("UPDATE parafly_rooms SET ai_check_count=ai_check_count+1 WHERE id=$1 AND ai_check_count<500 RETURNING ai_check_count",[room.id]);
+    if(!roomUsage)return fail(res,429,"This room has reached its AI Fact Check limit. Your teacher can continue without AI.");
     try{aiFeedback=await checkFacts(room.paragraphs,text);aiFactCount=aiFeedback.supportedFactCount;aiStatus=aiFeedback.meetsThreeFactGoal?"passed":"revise";}
     catch(error){console.error("AI fact check unavailable",error.message);aiStatus="unavailable";aiFeedback={revisionAdvice:"The AI check is temporarily unavailable. Your summary was saved so the activity can continue."};}
     if(aiStatus==="revise")return res.json({ok:false,needsRevision:true,check:aiFeedback});
@@ -220,7 +233,7 @@ app.post("/api/rooms/:id/vote",async(req,res,next)=>{try{
 app.get("/api/rooms/:id/export",async(req,res,next)=>{try{const room=await teacher(req,res);if(!room)return;
   const rows=(await db.query("SELECT s.nickname,r.round_index,r.response_text FROM parafly_responses r JOIN parafly_students s ON s.id=r.student_id WHERE r.room_id=$1 ORDER BY s.nickname,r.round_index",[room.id])).rows;
   const summaries=(await db.query("SELECT s.nickname,x.summary_text FROM parafly_summaries x JOIN parafly_students s ON s.id=x.student_id WHERE x.room_id=$1 ORDER BY s.nickname",[room.id])).rows;
-  const esc=v=>`"${String(v??"").replaceAll('"','""')}"`;const csv=["Nickname,Round,Response",...rows.map(r=>[r.nickname,r.round_index+1,r.response_text].map(esc).join(",")),...summaries.map(x=>[x.nickname,"Final Summary",x.summary_text].map(esc).join(","))].join("\n");
+  const csv=["Nickname,Round,Response",...rows.map(r=>[r.nickname,r.round_index+1,r.response_text].map(csvCell).join(",")),...summaries.map(x=>[x.nickname,"Final Summary",x.summary_text].map(csvCell).join(","))].join("\n");
   res.type("text/csv").attachment("parafly-responses.csv").send(csv);
 }catch(e){next(e)}});
 

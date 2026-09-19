@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { cleanCode, cleanNickname, currentParagraph, phases, publicRoom } from "../lib.js";
+import { cleanCode, cleanNickname, csvCell, currentParagraph, phases, publicRoom } from "../lib.js";
 
 test("join codes are normalized", () => assert.equal(cleanCode("ab-12 cd"), "AB12CD"));
 test("nicknames are trimmed and compacted", () => assert.equal(cleanNickname("  Blue   Hawk  "), "Blue Hawk"));
@@ -11,4 +11,9 @@ test("final summary is a first-class activity phase", () => assert.ok(phases.inc
 test("AI fact checking stays off unless a room enables it", () => {
   assert.equal(publicRoom({ paragraphs: [] }).aiFactCheck, false);
   assert.equal(publicRoom({ paragraphs: [], ai_fact_check: true }).aiFactCheck, true);
+});
+test("CSV cells neutralize spreadsheet formulas", () => {
+  assert.equal(csvCell('=HYPERLINK("https://bad.invalid")'), '"\'=HYPERLINK(""https://bad.invalid"")"');
+  assert.equal(csvCell("  +1+1"), '"\'  +1+1"');
+  assert.equal(csvCell("ordinary text"), '"ordinary text"');
 });
