@@ -21,6 +21,7 @@ export function publicRoom(room) {
     wordLimit: room.word_limit,
     endsAt: room.ends_at,
     feedbackMode: room.feedback_mode || "class_vote",
+    aiFactCheck: Boolean(room.ai_fact_check),
   };
 }
 

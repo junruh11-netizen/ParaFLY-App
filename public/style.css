@@ -45,6 +45,12 @@ input:focus,textarea:focus,select:focus{outline:3px solid #39a8d633;border-color
 .criteria-guide span{background:#eaf7fc;color:#12688b;padding:6px 9px;border-radius:99px;font-size:13px;font-weight:750}
 .teacher-feedback{background:#f0fbf7;border-left:5px solid var(--green);padding:16px;margin-top:14px;border-radius:10px}
 .teacher-feedback p{margin-bottom:0}
+.ai-note{background:#f0f7ff;border-left:5px solid var(--sky);padding:14px;border-radius:10px}
+.ai-revision{background:#fff4e8;border:1px solid #efb36c;padding:14px;border-radius:10px;margin:12px 0}
+.ai-revision p{margin:7px 0}
+.ai-badge{display:inline-block;margin-left:9px;background:#dcf6eb;color:#17664c;border-radius:99px;padding:4px 8px;font-size:12px;font-weight:800}
+.ai-badge.warning{background:#fff4e8;color:#8a4c08}
+.pill.ai-on{margin-left:8px;background:#dcf6eb;color:#17664c}
 .confirm{display:flex;gap:10px;align-items:flex-start;margin:14px 0;font-weight:700}
 .confirm input{width:auto;margin-top:4px;accent-color:var(--green)}
 .text-button{border:0;background:transparent;color:#a73319;font:inherit;font-weight:750;cursor:pointer}
