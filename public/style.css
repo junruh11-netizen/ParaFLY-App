@@ -45,6 +45,8 @@ input:focus,textarea:focus,select:focus{outline:3px solid #39a8d633;border-color
 .criteria-guide span{background:#eaf7fc;color:#12688b;padding:6px 9px;border-radius:99px;font-size:13px;font-weight:750}
 .teacher-feedback{background:#f0fbf7;border-left:5px solid var(--green);padding:16px;margin-top:14px;border-radius:10px}
 .teacher-feedback p{margin-bottom:0}
+.confirm{display:flex;gap:10px;align-items:flex-start;margin:14px 0;font-weight:700}
+.confirm input{width:auto;margin-top:4px;accent-color:var(--green)}
 .text-button{border:0;background:transparent;color:#a73319;font:inherit;font-weight:750;cursor:pointer}
 .passage-row{padding-bottom:14px;border-bottom:1px solid var(--line)}
 .status-list{display:flex;flex-wrap:wrap;gap:8px}

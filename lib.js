@@ -1,4 +1,4 @@
-export const phases = ["lobby", "writing", "review", "voting", "results", "complete"];
+export const phases = ["lobby", "writing", "review", "voting", "results", "summary", "complete"];
 
 export function cleanCode(value) {
   return String(value ?? "").replace(/[^a-z0-9]/gi, "").toUpperCase().slice(0, 8);
