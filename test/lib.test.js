@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { cleanCode, cleanNickname, csvCell, currentParagraph, phases, publicRoom } from "../lib.js";
+import { cleanCode, cleanNickname, csvCell, currentParagraph, phases, publicRoom, selectTwoTwoTwo } from "../lib.js";
 
 test("join codes are normalized", () => assert.equal(cleanCode("ab-12 cd"), "AB12CD"));
 test("nicknames are trimmed and compacted", () => assert.equal(cleanNickname("  Blue   Hawk  "), "Blue Hawk"));
@@ -8,6 +8,13 @@ test("only current paragraph is selected", () => assert.equal(currentParagraph({
 test("legacy rooms default to class vote feedback", () => assert.equal(publicRoom({ paragraphs: [] }).feedbackMode, "class_vote"));
 test("teacher pick feedback is exposed to clients", () => assert.equal(publicRoom({ paragraphs: [], feedback_mode: "teacher_pick" }).feedbackMode, "teacher_pick"));
 test("final summary is a first-class activity phase", () => assert.ok(phases.includes("summary")));
+test("sharing is a first-class activity phase", () => assert.ok(phases.includes("sharing")));
+test("2+2+2 requires six scored responses", () => assert.deepEqual(selectTwoTwoTwo([{id:1,score:5}]), []));
+test("2+2+2 returns two low, two middle, and two high without duplicates", () => {
+  const selected=selectTwoTwoTwo(Array.from({length:10},(_,i)=>({id:i+1,score:i+1})),()=>.5);
+  assert.equal(selected.length,6);assert.equal(new Set(selected).size,6);
+  assert.deepEqual(selected.slice(0,2),[1,2]);assert.deepEqual(selected.slice(-2),[9,10]);
+});
 test("AI fact checking stays off unless a room enables it", () => {
   assert.equal(publicRoom({ paragraphs: [] }).aiFactCheck, false);
   assert.equal(publicRoom({ paragraphs: [], ai_fact_check: true }).aiFactCheck, true);

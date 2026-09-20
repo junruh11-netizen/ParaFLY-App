@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import express from "express";
 import pg from "pg";
-import { cleanCode, cleanNickname, csvCell, currentParagraph, phases, publicRoom } from "./lib.js";
+import { cleanCode, cleanNickname, csvCell, currentParagraph, phases, publicRoom, selectTwoTwoTwo } from "./lib.js";
 
 const { Pool } = pg;
 const app = express();
@@ -35,6 +35,11 @@ CREATE TABLE IF NOT EXISTS parafly_votes (
  student_id INTEGER NOT NULL REFERENCES parafly_students(id) ON DELETE CASCADE, round_index INTEGER NOT NULL,
  response_id INTEGER NOT NULL REFERENCES parafly_responses(id) ON DELETE CASCADE, UNIQUE(student_id, round_index)
 );
+CREATE TABLE IF NOT EXISTS parafly_response_scores (
+ room_id INTEGER NOT NULL REFERENCES parafly_rooms(id) ON DELETE CASCADE,
+ response_id INTEGER PRIMARY KEY REFERENCES parafly_responses(id) ON DELETE CASCADE,
+ score INTEGER NOT NULL CHECK(score BETWEEN 1 AND 10), scored_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
 CREATE TABLE IF NOT EXISTS parafly_summaries (
  id SERIAL PRIMARY KEY, room_id INTEGER NOT NULL REFERENCES parafly_rooms(id) ON DELETE CASCADE,
  student_id INTEGER NOT NULL REFERENCES parafly_students(id) ON DELETE CASCADE,
@@ -52,6 +57,10 @@ ALTER TABLE parafly_rooms ADD COLUMN IF NOT EXISTS model_response_id INTEGER;
 ALTER TABLE parafly_rooms ADD COLUMN IF NOT EXISTS ai_fact_check BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE parafly_rooms ADD COLUMN IF NOT EXISTS ai_check_count INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE parafly_votes ADD COLUMN IF NOT EXISTS criterion TEXT NOT NULL DEFAULT '';
+ALTER TABLE parafly_votes ADD COLUMN IF NOT EXISTS battle_index INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE parafly_votes DROP CONSTRAINT IF EXISTS parafly_votes_student_id_round_index_key;
+CREATE UNIQUE INDEX IF NOT EXISTS parafly_votes_student_round_battle_idx ON parafly_votes(student_id,round_index,battle_index);
+ALTER TABLE parafly_rooms ADD COLUMN IF NOT EXISTS share_student_ids JSONB NOT NULL DEFAULT '[]';
 ALTER TABLE parafly_summaries ADD COLUMN IF NOT EXISTS ai_status TEXT NOT NULL DEFAULT 'not_used';
 ALTER TABLE parafly_summaries ADD COLUMN IF NOT EXISTS ai_fact_count INTEGER;
 ALTER TABLE parafly_summaries ADD COLUMN IF NOT EXISTS ai_feedback JSONB NOT NULL DEFAULT '{}';
@@ -92,7 +101,7 @@ async function student(req, res) {
 }
 
 app.get("/api/health", (_req,res)=>res.json({status:"ok"}));
-app.get("/api/config",(_req,res)=>res.json({aiFactCheckAvailable:aiAvailable()}));
+app.get("/api/config",(_req,res)=>res.json({aiFactCheckAvailable:false}));
 app.post("/api/rooms", async (req,res,next)=>{ try {
   const body=bodyOf(req);
   const title=String(body.title??"").trim().slice(0,120);
@@ -101,8 +110,7 @@ app.post("/api/rooms", async (req,res,next)=>{ try {
   const seconds=Math.min(600,Math.max(30,Number(body.secondsPerRound)||60));
   const wordLimit=body.wordLimit?Math.min(500,Math.max(5,Number(body.wordLimit))):null;
   const feedbackMode="class_vote";
-  const aiFactCheck=body.aiFactCheck===true;
-  if(aiFactCheck&&!aiAvailable())return fail(res,503,"AI Fact Check is not configured yet");
+  const aiFactCheck=false;
   let joinCode=cleanCode(body.joinCode);
   if(!title||paragraphs.length<1||paragraphs.length>3||paragraphs.some(x=>x.length>5000)) return fail(res,400,"Enter a title and one to three passages");
   if(joinCode.length<3) joinCode=crypto.randomBytes(3).toString("hex").toUpperCase();
@@ -134,16 +142,16 @@ app.get("/api/rooms/:id/student",async(req,res,next)=>{try{
   const mine=(await db.query("SELECT id,round_index,response_text,submitted_at FROM parafly_responses WHERE student_id=$1 ORDER BY round_index",[s.id])).rows;
   const summary=await one("SELECT summary_text,ai_status,ai_fact_count,ai_feedback,submitted_at FROM parafly_summaries WHERE student_id=$1",[s.id]);
   let exemplars=[],results=[],criteria=[];
-  if(["voting","results"].includes(room.phase)&&room.current_round>=0){
-    exemplars=(await db.query("SELECT id,response_text FROM parafly_responses WHERE room_id=$1 AND round_index=$2 AND id=ANY($3::int[]) ORDER BY id",[room.id,room.current_round,room.selected_ids])).rows;
+  if(["voting","results","sharing"].includes(room.phase)&&room.current_round>=0){
+    exemplars=(await db.query("SELECT id,response_text FROM parafly_responses WHERE room_id=$1 AND round_index=$2 AND id=ANY($3::int[]) ORDER BY array_position($3::int[],id)",[room.id,room.current_round,room.selected_ids])).rows;
   }
-  if(room.phase==="results") {
+  if(["results","sharing"].includes(room.phase)) {
     results=(await db.query(`SELECT response_id,COUNT(*)::int votes FROM parafly_votes WHERE room_id=$1 AND round_index=$2 GROUP BY response_id`,[room.id,room.current_round])).rows;
     criteria=(await db.query(`SELECT response_id,criterion,COUNT(*)::int votes FROM parafly_votes WHERE room_id=$1 AND round_index=$2 AND criterion<>'' GROUP BY response_id,criterion`,[room.id,room.current_round])).rows;
   }
-  const myVote=await one("SELECT response_id FROM parafly_votes WHERE student_id=$1 AND round_index=$2",[s.id,room.current_round]);
-  const showParagraph=["writing","review","voting","results"].includes(room.phase);
-  res.json({room:publicRoom(room),student:{id:s.id,nickname:s.nickname},paragraph:showParagraph?currentParagraph(room):null,mine,summary:summary??null,exemplars,results,criteria,myVote:myVote?.response_id??null,teacherFeedback:room.phase==="results"?room.teacher_feedback:""});
+  const myVotes=(await db.query("SELECT battle_index,response_id FROM parafly_votes WHERE student_id=$1 AND round_index=$2 ORDER BY battle_index",[s.id,room.current_round])).rows;
+  const showParagraph=["writing","review","voting","results","sharing"].includes(room.phase);
+  res.json({room:{...publicRoom(room),shareStudentIds:room.share_student_ids,winnerResponseId:room.model_response_id},student:{id:s.id,nickname:s.nickname},paragraph:showParagraph?currentParagraph(room):null,mine,summary:summary??null,exemplars,results,criteria,myVotes,teacherFeedback:["results","sharing"].includes(room.phase)?room.teacher_feedback:""});
 }catch(e){next(e)}});
 
 app.post("/api/rooms/:id/responses",async(req,res,next)=>{try{
@@ -185,12 +193,23 @@ app.get("/api/rooms/:id/teacher",async(req,res,next)=>{try{
   const votes=(await db.query("SELECT response_id,COUNT(*)::int votes FROM parafly_votes WHERE room_id=$1 AND round_index=$2 GROUP BY response_id",[room.id,room.current_round])).rows;
   const voteCriteriaRows=(await db.query("SELECT response_id,criterion,COUNT(*)::int votes FROM parafly_votes WHERE room_id=$1 AND round_index=$2 AND criterion<>'' GROUP BY response_id,criterion",[room.id,room.current_round])).rows;
   const summaries=(await db.query("SELECT x.student_id,x.summary_text,x.ai_status,x.ai_fact_count,x.ai_feedback,x.submitted_at,s.nickname FROM parafly_summaries x JOIN parafly_students s ON s.id=x.student_id WHERE x.room_id=$1 ORDER BY x.submitted_at",[room.id])).rows;
-  res.json({room:{...publicRoom(room),paragraphs:room.paragraphs,selectedIds:room.selected_ids,teacherFeedback:room.teacher_feedback,modelResponseId:room.model_response_id},students,responses,summaries,votes,voteCriteria:voteCriteriaRows});
+  const scores=(await db.query("SELECT response_id,score FROM parafly_response_scores WHERE room_id=$1",[room.id])).rows;
+  res.json({room:{...publicRoom(room),paragraphs:room.paragraphs,selectedIds:room.selected_ids,shareStudentIds:room.share_student_ids,teacherFeedback:room.teacher_feedback,modelResponseId:room.model_response_id},students,responses,summaries,votes,voteCriteria:voteCriteriaRows,scores});
+}catch(e){next(e)}});
+
+app.put("/api/rooms/:id/scores/:responseId",async(req,res,next)=>{try{
+  const room=await teacher(req,res);if(!room)return;const responseId=Number(req.params.responseId),score=Number(bodyOf(req).score);
+  if(!["writing","review"].includes(room.phase))return fail(res,409,"Scores can only be changed while students are writing or during review");
+  if(!Number.isInteger(score)||score<1||score>10)return fail(res,400,"Choose a score from 1 to 10");
+  const valid=await one("SELECT id FROM parafly_responses WHERE id=$1 AND room_id=$2 AND round_index=$3",[responseId,room.id,room.current_round]);
+  if(!valid)return fail(res,404,"Response not found");
+  await db.query(`INSERT INTO parafly_response_scores(room_id,response_id,score) VALUES($1,$2,$3)
+    ON CONFLICT(response_id) DO UPDATE SET score=EXCLUDED.score,scored_at=NOW()`,[room.id,responseId,score]);res.json({ok:true});
 }catch(e){next(e)}});
 
 app.patch("/api/rooms/:id/control",async(req,res,next)=>{try{
   const room=await teacher(req,res);if(!room)return;const body=bodyOf(req),action=body.action;
-  let phase=room.phase,round=room.current_round,endsAt=room.ends_at,selected=room.selected_ids,teacherFeedback=room.teacher_feedback,modelResponseId=room.model_response_id;
+  let phase=room.phase,round=room.current_round,endsAt=room.ends_at,selected=room.selected_ids,shareStudentIds=room.share_student_ids,teacherFeedback=room.teacher_feedback,modelResponseId=room.model_response_id;
   if(action==="start") { if(phase!=="lobby")return fail(res,409,"The activity has already started"); round=0; phase="writing"; endsAt=new Date(Date.now()+room.seconds_per_round*1000); selected=[];teacherFeedback="";modelResponseId=null; }
   else if(action==="end") { if(phase!=="writing")return fail(res,409,"No writing round is open"); phase="review"; endsAt=null; }
   else if(action==="reopen") { if(phase!=="review")return fail(res,409,"Only a locked writing round can be reopened"); phase="writing"; endsAt=new Date(Date.now()+room.seconds_per_round*1000); selected=[];teacherFeedback="";modelResponseId=null; }
@@ -198,11 +217,11 @@ app.patch("/api/rooms/:id/control",async(req,res,next)=>{try{
   else if(action==="vote") {
     if(phase!=="review")return fail(res,409,"Responses are not ready for selection");
     if(room.feedback_mode!=="class_vote")return fail(res,409,"This activity uses Teacher Pick feedback");
-    if(!Array.isArray(body.selectedIds))return fail(res,400,"Select two to five responses");
-    selected=[...new Set(body.selectedIds.map(Number).filter(Number.isInteger))].slice(0,5);
-    if(selected.length<2)return fail(res,400,"Select at least two responses");
-    const valid=await db.query("SELECT id FROM parafly_responses WHERE room_id=$1 AND round_index=$2 AND id=ANY($3::int[])",[room.id,room.current_round,selected]);
-    if(valid.rowCount!==selected.length)return fail(res,400,"One of those responses is not part of this round");
+    const scored=(await db.query(`SELECT r.id,s.score FROM parafly_responses r JOIN parafly_response_scores s ON s.response_id=r.id
+      WHERE r.room_id=$1 AND r.round_index=$2`,[room.id,room.current_round])).rows;
+    selected=selectTwoTwoTwo(scored);
+    if(selected.length!==6)return fail(res,409,"Score at least six responses before building the 2+2+2 set");
+    selected=selected.sort(()=>Math.random()-.5);
     phase="voting";
   }
   else if(action==="teacherResult") {
@@ -214,20 +233,31 @@ app.patch("/api/rooms/:id/control",async(req,res,next)=>{try{
     if(feedback.length<3)return fail(res,400,"Explain why this paraphrase works");
     selected=[responseId];modelResponseId=responseId;teacherFeedback=feedback;phase="results";
   }
-  else if(action==="results") { if(phase!=="voting")return fail(res,409,"Voting is not open"); phase="results"; }
-  else if(action==="next") { if(phase!=="results")return fail(res,409,"Reveal the results before continuing"); if(round+1>=room.paragraphs.length){phase="summary";endsAt=null;} else {round++;phase="writing";endsAt=new Date(Date.now()+room.seconds_per_round*1000);selected=[];teacherFeedback="";modelResponseId=null;} }
+  else if(action==="results") {
+    if(phase!=="voting")return fail(res,409,"Voting is not open");
+    const leaders=(await db.query(`SELECT response_id,COUNT(*)::int votes FROM parafly_votes
+      WHERE room_id=$1 AND round_index=$2 AND response_id=ANY($3::int[])
+      GROUP BY response_id ORDER BY votes DESC`,[room.id,room.current_round,selected])).rows;
+    if(!leaders.length)return fail(res,409,"At least one student must vote before revealing a winner");
+    const high=leaders[0].votes,tied=leaders.filter(x=>x.votes===high);
+    modelResponseId=tied[Math.floor(Math.random()*tied.length)].response_id;
+    phase="results";endsAt=new Date(Date.now()+45000);
+  }
+  else if(action==="share") { if(phase!=="results")return fail(res,409,"Start sharing after the think-pair-share"); const ids=(await db.query("SELECT id FROM parafly_students WHERE room_id=$1 ORDER BY random() LIMIT 2",[room.id])).rows.map(x=>x.id);shareStudentIds=ids;phase="sharing";endsAt=null; }
+  else if(action==="next") { if(phase!=="sharing")return fail(res,409,"Complete sharing before continuing"); if(round+1>=room.paragraphs.length){phase="summary";endsAt=null;} else {round++;phase="writing";endsAt=new Date(Date.now()+room.seconds_per_round*1000);selected=[];shareStudentIds=[];teacherFeedback="";modelResponseId=null;} }
   else if(action==="finish") { if(phase!=="summary")return fail(res,409,"The final summary is not open"); phase="complete";endsAt=null; }
   else if(action==="addTime") { if(phase!=="writing")return fail(res,409,"No writing round is open"); endsAt=new Date(Math.max(Date.now(),new Date(endsAt).getTime())+30000); }
   else return fail(res,400,"Unknown control");
-  const updated=await one("UPDATE parafly_rooms SET phase=$1,current_round=$2,ends_at=$3,selected_ids=$4,teacher_feedback=$5,model_response_id=$6 WHERE id=$7 RETURNING *",[phase,round,endsAt,JSON.stringify(selected),teacherFeedback,modelResponseId,room.id]);
+  const updated=await one("UPDATE parafly_rooms SET phase=$1,current_round=$2,ends_at=$3,selected_ids=$4,share_student_ids=$5,teacher_feedback=$6,model_response_id=$7 WHERE id=$8 RETURNING *",[phase,round,endsAt,JSON.stringify(selected),JSON.stringify(shareStudentIds),teacherFeedback,modelResponseId,room.id]);
   res.json(publicRoom(updated));
 }catch(e){next(e)}});
 
 app.post("/api/rooms/:id/vote",async(req,res,next)=>{try{
-  const s=await student(req,res);if(!s)return;const room=await roomById(req.params.id),body=bodyOf(req),responseId=Number(body.responseId),criterion=String(body.criterion??"");
+  const s=await student(req,res);if(!s)return;const room=await roomById(req.params.id),body=bodyOf(req),responseId=Number(body.responseId),battleIndex=Number(body.battleIndex),criterion=String(body.criterion??"");
   if(!room||room.phase!=="voting"||!room.selected_ids.includes(responseId))return fail(res,409,"Voting is closed");
-  if(!voteCriteria.includes(criterion))return fail(res,400,"Choose why this paraphrase is strongest");
-  await db.query("INSERT INTO parafly_votes(room_id,student_id,round_index,response_id,criterion) VALUES($1,$2,$3,$4,$5) ON CONFLICT(student_id,round_index) DO UPDATE SET response_id=EXCLUDED.response_id,criterion=EXCLUDED.criterion",[room.id,s.id,room.current_round,responseId,criterion]);res.json({ok:true});
+  if(!Number.isInteger(battleIndex)||battleIndex<0||battleIndex>2)return fail(res,400,"Invalid battle");
+  const pair=room.selected_ids.slice(battleIndex*2,battleIndex*2+2);if(!pair.includes(responseId))return fail(res,400,"Choose one of the two responses shown");
+  await db.query("INSERT INTO parafly_votes(room_id,student_id,round_index,response_id,criterion,battle_index) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(student_id,round_index,battle_index) DO UPDATE SET response_id=EXCLUDED.response_id,criterion=EXCLUDED.criterion",[room.id,s.id,room.current_round,responseId,criterion,battleIndex]);res.json({ok:true});
 }catch(e){next(e)}});
 
 app.get("/api/rooms/:id/export",async(req,res,next)=>{try{const room=await teacher(req,res);if(!room)return;
