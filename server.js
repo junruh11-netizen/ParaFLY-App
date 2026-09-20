@@ -194,7 +194,11 @@ app.get("/api/rooms/:id/teacher",async(req,res,next)=>{try{
   const voteCriteriaRows=(await db.query("SELECT response_id,criterion,COUNT(*)::int votes FROM parafly_votes WHERE room_id=$1 AND round_index=$2 AND criterion<>'' GROUP BY response_id,criterion",[room.id,room.current_round])).rows;
   const summaries=(await db.query("SELECT x.student_id,x.summary_text,x.ai_status,x.ai_fact_count,x.ai_feedback,x.submitted_at,s.nickname FROM parafly_summaries x JOIN parafly_students s ON s.id=x.student_id WHERE x.room_id=$1 ORDER BY x.submitted_at",[room.id])).rows;
   const scores=(await db.query("SELECT response_id,score FROM parafly_response_scores WHERE room_id=$1",[room.id])).rows;
-  res.json({room:{...publicRoom(room),paragraphs:room.paragraphs,selectedIds:room.selected_ids,shareStudentIds:room.share_student_ids,teacherFeedback:room.teacher_feedback,modelResponseId:room.model_response_id},students,responses,summaries,votes,voteCriteria:voteCriteriaRows,scores});
+  const voteProgress=await one(`SELECT COUNT(*)::int started,
+    COUNT(*) FILTER (WHERE vote_count>=3)::int completed
+    FROM (SELECT student_id,COUNT(*)::int vote_count FROM parafly_votes
+      WHERE room_id=$1 AND round_index=$2 GROUP BY student_id) x`,[room.id,room.current_round]);
+  res.json({room:{...publicRoom(room),paragraphs:room.paragraphs,selectedIds:room.selected_ids,shareStudentIds:room.share_student_ids,teacherFeedback:room.teacher_feedback,modelResponseId:room.model_response_id},students,responses,summaries,votes,voteCriteria:voteCriteriaRows,scores,voteProgress:voteProgress??{started:0,completed:0}});
 }catch(e){next(e)}});
 
 app.put("/api/rooms/:id/scores/:responseId",async(req,res,next)=>{try{
