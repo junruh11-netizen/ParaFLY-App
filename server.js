@@ -81,7 +81,9 @@ ALTER TABLE parafly_votes DROP CONSTRAINT IF EXISTS parafly_votes_student_id_rou
 CREATE UNIQUE INDEX IF NOT EXISTS parafly_votes_student_round_battle_idx ON parafly_votes(student_id,round_index,battle_index);
 ALTER TABLE parafly_rooms ADD COLUMN IF NOT EXISTS share_student_ids JSONB NOT NULL DEFAULT '[]';
 ALTER TABLE parafly_rooms ADD COLUMN IF NOT EXISTS identity_mode TEXT NOT NULL DEFAULT 'names';
-ALTER TABLE parafly_rooms ADD COLUMN IF NOT EXISTS hide_identities BOOLEAN NOT NULL DEFAULT TRUE;
+ALTER TABLE parafly_rooms ALTER COLUMN identity_mode SET DEFAULT 'names';
+ALTER TABLE parafly_rooms ADD COLUMN IF NOT EXISTS hide_identities BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE parafly_rooms ALTER COLUMN hide_identities SET DEFAULT FALSE;
 ALTER TABLE parafly_rooms ADD COLUMN IF NOT EXISTS timer_ends_at TIMESTAMPTZ;
 ALTER TABLE parafly_rooms ADD COLUMN IF NOT EXISTS timer_remaining INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE parafly_rooms ADD COLUMN IF NOT EXISTS timer_running BOOLEAN NOT NULL DEFAULT FALSE;
@@ -261,8 +263,6 @@ app.post("/api/rooms", async (req, res, next) => {
       : null;
     const feedbackMode = "class_vote";
     const aiFactCheck = false;
-    const identityMode =
-      body.identityMode === "automatic" ? "automatic" : "names";
     let joinCode = cleanCode(body.joinCode);
     if (
       !title ||
@@ -276,7 +276,7 @@ app.post("/api/rooms", async (req, res, next) => {
     const token = crypto.randomUUID();
     const result = await one(
       `INSERT INTO parafly_rooms(title,directions,paragraphs,join_code,teacher_token,seconds_per_round,word_limit,feedback_mode,ai_fact_check,identity_mode,hide_identities)
-    VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,TRUE) RETURNING *`,
+    VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,'names',FALSE) RETURNING *`,
       [
         title,
         directions,
@@ -287,7 +287,6 @@ app.post("/api/rooms", async (req, res, next) => {
         wordLimit,
         feedbackMode,
         aiFactCheck,
-        identityMode,
       ],
     );
     res.status(201).json({ ...publicRoom(result), teacherToken: token });
@@ -322,11 +321,8 @@ app.post("/api/rooms/:id/join", async (req, res, next) => {
     );
     if (classSize.count >= 100)
       return fail(res, 409, "This class has reached its 100-student limit");
-    const realName =
-      room.identity_mode === "automatic"
-        ? ""
-        : cleanNickname(bodyOf(req).nickname);
-    if (room.identity_mode !== "automatic" && realName.length < 1)
+    const realName = cleanNickname(bodyOf(req).nickname);
+    if (realName.length < 1)
       return fail(res, 400, "Enter your classroom name");
     if (realName) {
       const duplicate = await one(
@@ -336,32 +332,18 @@ app.post("/api/rooms/:id/join", async (req, res, next) => {
       if (duplicate) return fail(res, 409, "That name is already in use");
     }
     const token = crypto.randomUUID();
-    let alias = studentAlias(classSize.count),
-      s;
-    for (let attempt = 0; attempt < 60; attempt++) {
-      if (room.identity_mode === "automatic" && attempt > 0)
-        alias = studentAlias(crypto.randomInt(0, 400));
-      const nickname = room.identity_mode === "automatic" ? alias : realName;
-      try {
-        s = await one(
-          "INSERT INTO parafly_students(room_id,nickname,real_name,alias,token) VALUES($1,$2,$3,$4,$5) RETURNING id,nickname,alias",
-          [room.id, nickname, realName, alias, token],
-        );
-        break;
-      } catch (error) {
-        if (error.code !== "23505" || room.identity_mode !== "automatic")
-          throw error;
-      }
-    }
-    if (!s)
-      return fail(
-        res,
-        409,
-        "Could not assign a unique classroom nickname. Try joining again.",
-      );
+    let s = await one(
+      "INSERT INTO parafly_students(room_id,nickname,real_name,alias,token) VALUES($1,$2,$3,$4,$5) RETURNING id,nickname,alias",
+      [room.id, realName, realName, `Pending ${token}`, token],
+    );
+    const alias = studentAlias(s.id);
+    s = await one(
+      "UPDATE parafly_students SET alias=$1 WHERE id=$2 RETURNING id,nickname,alias",
+      [alias, s.id],
+    );
     res.status(201).json({
       ...s,
-      nickname: room.identity_mode === "automatic" ? alias : realName,
+      nickname: realName,
       roomId: room.id,
       token,
     });
@@ -454,7 +436,10 @@ app.get("/api/rooms/:id/student", async (req, res, next) => {
         shareStudentIds: room.share_student_ids,
         winnerResponseId: room.model_response_id,
       },
-      student: { id: s.id, nickname: displayName(room, s) },
+      student: {
+        id: s.id,
+        nickname: s.real_name || s.nickname || `Student ${s.id}`,
+      },
       paragraph: showParagraph ? currentParagraph(room) : null,
       mine,
       summary: summary ?? null,
@@ -702,25 +687,13 @@ app.patch("/api/rooms/:id/settings", async (req, res, next) => {
     const room = await teacher(req, res);
     if (!room) return;
     const body = bodyOf(req);
-    const identityMode =
-      body.identityMode === "automatic"
-        ? "automatic"
-        : body.identityMode === "names"
-          ? "names"
-          : room.identity_mode;
-    if (identityMode !== room.identity_mode && room.phase !== "lobby")
-      return fail(
-        res,
-        409,
-        "Identity mode can only change before the activity starts",
-      );
     const hideIdentities =
       typeof body.hideIdentities === "boolean"
         ? body.hideIdentities
         : room.hide_identities;
     const updated = await one(
-      "UPDATE parafly_rooms SET identity_mode=$1,hide_identities=$2 WHERE id=$3 RETURNING *",
-      [identityMode, hideIdentities, room.id],
+      "UPDATE parafly_rooms SET identity_mode='names',hide_identities=$1 WHERE id=$2 RETURNING *",
+      [hideIdentities, room.id],
     );
     res.json(publicRoom(updated));
   } catch (e) {
