@@ -335,21 +335,30 @@ app.post("/api/rooms/:id/join", async (req, res, next) => {
       );
       if (duplicate) return fail(res, 409, "That name is already in use");
     }
-    let alias = studentAlias(classSize.count),
-      offset = classSize.count;
-    while (
-      await one(
-        "SELECT id FROM parafly_students WHERE room_id=$1 AND LOWER(alias)=LOWER($2)",
-        [room.id, alias],
-      )
-    )
-      alias = studentAlias(++offset);
-    const nickname = room.identity_mode === "automatic" ? alias : realName;
     const token = crypto.randomUUID();
-    const s = await one(
-      "INSERT INTO parafly_students(room_id,nickname,real_name,alias,token) VALUES($1,$2,$3,$4,$5) RETURNING id,nickname,alias",
-      [room.id, nickname, realName, alias, token],
-    );
+    let alias = studentAlias(classSize.count),
+      s;
+    for (let attempt = 0; attempt < 60; attempt++) {
+      if (room.identity_mode === "automatic" && attempt > 0)
+        alias = studentAlias(crypto.randomInt(0, 400));
+      const nickname = room.identity_mode === "automatic" ? alias : realName;
+      try {
+        s = await one(
+          "INSERT INTO parafly_students(room_id,nickname,real_name,alias,token) VALUES($1,$2,$3,$4,$5) RETURNING id,nickname,alias",
+          [room.id, nickname, realName, alias, token],
+        );
+        break;
+      } catch (error) {
+        if (error.code !== "23505" || room.identity_mode !== "automatic")
+          throw error;
+      }
+    }
+    if (!s)
+      return fail(
+        res,
+        409,
+        "Could not assign a unique classroom nickname. Try joining again.",
+      );
     res.status(201).json({
       ...s,
       nickname: room.identity_mode === "automatic" ? alias : realName,
