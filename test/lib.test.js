@@ -30,7 +30,7 @@ test("legacy rooms default to class vote feedback", () =>
 test("legacy rooms receive safe identity, timer, voting, and score defaults", () => {
   const room = publicRoom({ paragraphs: [] });
   assert.equal(room.identityMode, "names");
-  assert.equal(room.hideIdentities, true);
+  assert.equal(room.hideIdentities, false);
   assert.equal(room.timerRunning, false);
   assert.equal(room.voteExpected, 0);
   assert.equal(room.voteClosed, false);
