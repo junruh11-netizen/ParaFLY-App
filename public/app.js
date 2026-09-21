@@ -64,8 +64,8 @@ function setPage(html) {
   app.innerHTML = html;
 }
 
-const joinMarkup = (preset = "", home = false, identityMode = "names") =>
-  `<section class="${home ? "join-hero" : "card join-card"}">${home ? '<div class="live-mark">Para<span>FLY</span> <small>Live</small></div><p>Read it. Say it your way.</p>' : '<span class="pill">STUDENT JOIN</span><h1>Join ParaFLY</h1>'}<div class="join-panel"><h2>Join a session</h2><p class="muted">${identityMode === "automatic" ? "Your class nickname will be assigned automatically." : "Enter your class code and name."}</p><form id="joinForm"><div class="field"><label for="classCode">Class code</label><input id="classCode" name="code" required maxlength="8" autocomplete="off" value="${esc(preset)}" placeholder="ABCD" style="text-transform:uppercase"></div>${home || identityMode === "automatic" ? "" : '<div class="field"><label for="nickname">Your name</label><input id="nickname" name="nickname" required maxlength="30" autocomplete="off" placeholder="First name"></div>'}<p id="err"></p><button class="btn orange large" ${home ? 'id="lookupRoom"' : ""}>${home ? "Join session" : "Join"}</button></form>${home ? '<p class="teacher-entry">Teacher? <button class="link-button" id="create">Start a ParaFLY</button></p>' : ""}</div></section>`;
+const joinMarkup = (preset = "", home = false) =>
+  `<section class="${home ? "join-hero" : "card join-card"}">${home ? '<div class="live-mark">Para<span>FLY</span> <small>Live</small></div><p>Read it. Say it your way.</p>' : '<span class="pill">STUDENT JOIN</span><h1>Join ParaFLY</h1>'}<div class="join-panel"><h2>Join a session</h2><p class="muted">Enter your class code and real name.</p><form id="joinForm"><div class="field"><label for="classCode">Class code</label><input id="classCode" name="code" required maxlength="8" autocomplete="off" value="${esc(preset)}" placeholder="ABCD" style="text-transform:uppercase"></div>${home ? "" : '<div class="field"><label for="nickname">Your real name</label><input id="nickname" name="nickname" required maxlength="30" autocomplete="off" placeholder="First and last name"></div>'}<p id="err"></p><button class="btn orange large" ${home ? 'id="lookupRoom"' : ""}>${home ? "Join session" : "Join"}</button></form>${home ? '<p class="teacher-entry">Teacher? <button class="link-button" id="create">Start a ParaFLY</button></p>' : ""}</div></section>`;
 const wireJoin = (home) => {
   const formEl = byId("joinForm"),
     errEl = byId("err");
@@ -111,12 +111,6 @@ async function create() {
   setPage(
     `<div class="setup-heading"><a class="back-link" href="/">← Home</a><h1>New session</h1><p class="muted">Paste a short passage. Add another only when your class is ready for another rep.</p></div><form id="form"><div class="card"><div class="field"><label for="activityTitle">Session title</label><input id="activityTitle" name="title" required maxlength="120" placeholder="e.g. The Declaration in Our Own Words"></div><div class="preset-row"><button type="button" class="preset active" data-preset="first">First Rep <small>1 passage</small></button><button type="button" class="preset" data-preset="standard">Standard ParaFLY <small>3 passages</small></button></div></div><div class="card"><div class="row heading-row"><div><h2>Passages</h2><p class="muted">Students see one passage at a time.</p></div><button type="button" class="btn secondary" id="addPassage">+ Add passage</button></div><div id="passages"></div></div><details class="card advanced"><summary>More options <span>Directions, timing, word limit${config.aiFactCheckAvailable ? ", AI" : ""}</span></summary><div class="field"><label for="directions">Directions for students</label><textarea id="directions" name="directions" maxlength="500" placeholder="Keep the meaning, but change the wording and sentence structure."></textarea></div><div class="grid two"><div class="field"><label for="seconds">Seconds per passage</label><input id="seconds" name="seconds" type="number" min="30" max="600" value="60"></div><div class="field"><label for="words">Maximum words</label><input id="words" name="words" type="number" min="5" max="500" placeholder="No limit"></div></div>${config.aiFactCheckAvailable ? '<label class="confirm"><input name="aiFactCheck" type="checkbox"> Use optional AI Fact Check for the final summary</label>' : ""}</details><div class="setup-summary"><b>Students will complete:</b> <span id="setupSummary">1 passage · class review and vote · final summary with 3+ facts</span></div><div class="row create-actions"><button type="button" class="btn secondary" id="previewStudent">Preview student view</button><button class="btn orange large">Create session</button></div><p id="err"></p></form><dialog id="previewDialog" class="app-dialog"><button class="dialog-close" id="closePreview" aria-label="Close">×</button><span class="pill">STUDENT PREVIEW</span><h2>Read & say it your way</h2><div class="preview-content" id="previewContent"></div><p class="muted">Preview only — nothing here is saved.</p></dialog>`,
   );
-  document
-    .querySelector("details.advanced")
-    ?.insertAdjacentHTML(
-      "beforeend",
-      '<div class="field"><label for="identityMode">Student identity</label><select id="identityMode" name="identityMode"><option value="names">Students enter their names</option><option value="automatic">Automatically assign classroom nicknames</option></select><p class="muted">Student work stays anonymous while you review it by default.</p></div>',
-    );
   const formEl = byId("form"),
     errEl = byId("err"),
     passagesEl = byId("passages"),
@@ -190,7 +184,6 @@ async function create() {
             secondsPerRound: Number(d.get("seconds")),
             wordLimit: d.get("words") ? Number(d.get("words")) : null,
             aiFactCheck: d.get("aiFactCheck") === "on",
-            identityMode: d.get("identityMode"),
           }),
         });
         store.set("parafly-teacher", {
@@ -209,14 +202,7 @@ async function create() {
 async function join(routeCode = "") {
   const preset =
     routeCode || new URLSearchParams(location.search).get("code") || "";
-  let identityMode = "names";
-  if (preset) {
-    try {
-      identityMode =
-        (await api(`/rooms/code/${preset}`)).identityMode || "names";
-    } catch {}
-  }
-  setPage(joinMarkup(preset, false, identityMode));
+  setPage(joinMarkup(preset, false));
   wireJoin(false);
 }
 
@@ -1249,7 +1235,6 @@ async function teacherPageV3(id) {
         r.phase === "voting"
           ? `<section class="card voting-dashboard"><div class="row heading-row"><div><span class="section-label">LIVE VOTING</span><h2>${complete} of ${expected} students finished</h2></div><b class="vote-percent">${percent}%</b></div><div class="progress-track large"><i style="width:${percent}%"></i></div><p>${d.voteProgress.submitted || 0} of ${expected * 3} total matchup votes submitted.</p><div class="row"><button class="btn secondary" data-action="reopenVote" ${r.voteClosed ? "" : "disabled"}>Reopen voting</button><select id="resetBattle"><option value="">Reset a matchup…</option><option value="0">Reset matchup 1</option><option value="1">Reset matchup 2</option><option value="2">Reset matchup 3</option></select></div></section>`
           : "";
-      const identityPanel = `<details class="card session-settings"><summary>Student identity & privacy</summary><div class="grid two"><div class="field"><label>Identity mode</label><select id="identityModeSetting" ${r.phase !== "lobby" ? "disabled" : ""}><option value="names" ${r.identityMode === "names" ? "selected" : ""}>Students enter names</option><option value="automatic" ${r.identityMode === "automatic" ? "selected" : ""}>Automatic classroom nicknames</option></select></div><label class="confirm"><input id="hideIdentities" type="checkbox" ${r.hideIdentities ? "checked" : ""}> Hide student identities while reviewing</label></div><p class="muted">Projected responses and voting choices always remain anonymous.</p></details>`;
       const phaseTitle = {
         lobby: "Invite students",
         writing: "Students are writing",
@@ -1261,7 +1246,7 @@ async function teacherPageV3(id) {
         complete: "ParaFLY complete",
       }[r.phase];
       setPage(
-        `<section class="session-card"><button class="join-code" id="copyCode" title="Copy class code">${esc(r.joinCode)}</button><div class="session-copy"><span class="section-label">PARAFLY LIVE</span><h1>${esc(r.title)}</h1><p>${d.students.length} joined · ${roundResponses.length} sent · Passage ${Math.max(1, r.currentRound + 1)} of ${r.paragraphCount}</p></div><div class="session-actions"><button class="btn secondary" id="copyJoin">Copy student link</button><button class="btn secondary" id="projectJoin">Project join screen</button>${controls}</div></section>${roundBar(r)}<div class="teacher-stage"><section class="card current-step"><span class="section-label">CURRENT STEP</span><h2>${phaseTitle}</h2>${r.currentRound >= 0 && !["summary", "complete"].includes(r.phase) ? `<div class="passage">${esc(r.paragraphs[r.currentRound])}</div>` : ""}${criteriaGuide()}</section><aside class="gauge-panel">${gaugeMarkup(average, scored.length)}</aside></div>${timerPanel}${votingPanel}${scorePanel}${identityPanel}<section class="card roster-card"><h2>Student status</h2><div class="status-list">${d.students.map((x) => `<span class="student-chip ${submittedIds.has(x.id) ? "done" : ""}">${esc(x.display_name)} ${submittedIds.has(x.id) ? "✓" : ""}</span>`).join("") || "No students yet."}</div></section><dialog id="joinDialog" class="app-dialog projector-dialog"><button class="dialog-close" id="closeJoin" aria-label="Close">×</button><div class="projector-content"><span class="section-label">JOIN CODE</span><div class="project-code">${esc(r.joinCode)}</div><img class="join-qr" src="${d.qrDataUrl}" alt="QR code for the student join link"><p>Scan the QR code, or open:</p><h2 class="join-url">${esc(d.joinUrl)}</h2><button class="btn secondary" id="fullscreenJoin">Fullscreen</button></div></dialog>`,
+        `<section class="session-card"><button class="join-code" id="copyCode" title="Copy class code">${esc(r.joinCode)}</button><div class="session-copy"><span class="section-label">PARAFLY LIVE</span><h1>${esc(r.title)}</h1><p>${d.students.length} joined · ${roundResponses.length} sent · Passage ${Math.max(1, r.currentRound + 1)} of ${r.paragraphCount}</p></div><div class="session-actions"><label class="nickname-toggle" title="Switch teacher-facing student labels between real names and assigned nicknames"><input id="showNicknames" type="checkbox" ${r.hideIdentities ? "checked" : ""}><span class="toggle-track"></span><b>Show nicknames</b></label><button class="btn secondary" id="copyJoin">Copy student link</button><button class="btn secondary" id="projectJoin">Project join screen</button>${controls}</div></section>${roundBar(r)}<div class="teacher-stage"><section class="card current-step"><span class="section-label">CURRENT STEP</span><h2>${phaseTitle}</h2>${r.currentRound >= 0 && !["summary", "complete"].includes(r.phase) ? `<div class="passage">${esc(r.paragraphs[r.currentRound])}</div>` : ""}${criteriaGuide()}</section><aside class="gauge-panel">${gaugeMarkup(average, scored.length)}</aside></div>${timerPanel}${votingPanel}${scorePanel}<section class="card roster-card"><h2>Student status</h2><div class="status-list">${d.students.map((x) => `<span class="student-chip ${submittedIds.has(x.id) ? "done" : ""}">${esc(x.display_name)} ${submittedIds.has(x.id) ? "✓" : ""}</span>`).join("") || "No students yet."}</div></section><dialog id="joinDialog" class="app-dialog projector-dialog"><button class="dialog-close" id="closeJoin" aria-label="Close">×</button><div class="projector-content"><span class="section-label">JOIN CODE</span><div class="project-code">${esc(r.joinCode)}</div><img class="join-qr" src="${d.qrDataUrl}" alt="QR code for the student join link"><p>Scan the QR code, or open:</p><h2 class="join-url">${esc(d.joinUrl)}</h2><button class="btn secondary" id="fullscreenJoin">Fullscreen</button></div></dialog>`,
       );
       document.querySelectorAll("[data-action]").forEach(
         (b) =>
@@ -1313,13 +1298,10 @@ async function teacherPageV3(id) {
         };
       const saveSettings = () =>
         call(`/rooms/${id}/settings`, "PATCH", {
-          identityMode: byId("identityModeSetting")?.value,
-          hideIdentities: byId("hideIdentities")?.checked,
+          hideIdentities: byId("showNicknames")?.checked,
         }).then(load);
-      if (byId("identityModeSetting"))
-        byId("identityModeSetting").onchange = saveSettings;
-      if (byId("hideIdentities"))
-        byId("hideIdentities").onchange = saveSettings;
+      if (byId("showNicknames"))
+        byId("showNicknames").onchange = saveSettings;
       const startTimer = (seconds) =>
         call(`/rooms/${id}/timer`, "POST", {
           action: "start",
