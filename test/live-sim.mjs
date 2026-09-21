@@ -8,10 +8,10 @@ async function request(path,{method="GET",token,body}={}){
 const ok=async(path,options)=>{const result=await request(path,options);assert.ok(result.status>=200&&result.status<300,`${options?.method||"GET"} ${path}: ${result.status} ${JSON.stringify(result.data)}`);return result.data};
 
 const code=`T${Date.now().toString(36).slice(-5)}`.toUpperCase();
-const room=await ok("/rooms",{method:"POST",body:{title:"34 Student Feature Test",directions:"Keep the same facts.",paragraphs:["The Constitution was signed in 1787 and created a new framework for the United States government."],secondsPerRound:120,identityMode:"automatic"}});
+const room=await ok("/rooms",{method:"POST",body:{title:"34 Student Feature Test",directions:"Keep the same facts.",paragraphs:["The Constitution was signed in 1787 and created a new framework for the United States government."],secondsPerRound:120}});
 console.log("room",room.id);
 const teacher={"x-teacher-token":room.teacherToken};
-const students=await Promise.all(Array.from({length:34},()=>ok(`/rooms/${room.id}/join`,{method:"POST",body:{}})));
+const students=await Promise.all(Array.from({length:34},(_,i)=>ok(`/rooms/${room.id}/join`,{method:"POST",body:{nickname:`Student ${i+1}`}})));
 console.log("joined",students.length);
 assert.equal(new Set(students.map(x=>x.nickname)).size,34);
 let dashboard=await ok(`/rooms/${room.id}/teacher`,{token:teacher});
