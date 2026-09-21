@@ -1499,6 +1499,54 @@ select:focus {
   gap: 10px;
   flex-wrap: wrap;
   justify-content: flex-end;
+  align-items: center;
+}
+.nickname-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 44px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: #f7fbf8;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.nickname-toggle input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+.toggle-track {
+  position: relative;
+  width: 42px;
+  height: 24px;
+  border-radius: 999px;
+  background: #b9c4bd;
+  transition: background 0.18s ease;
+}
+.toggle-track::after {
+  content: "";
+  position: absolute;
+  width: 18px;
+  height: 18px;
+  left: 3px;
+  top: 3px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 3px #0003;
+  transition: transform 0.18s ease;
+}
+.nickname-toggle input:checked + .toggle-track {
+  background: var(--green);
+}
+.nickname-toggle input:checked + .toggle-track::after {
+  transform: translateX(18px);
+}
+.nickname-toggle input:focus-visible + .toggle-track {
+  outline: 3px solid #94d5b1;
+  outline-offset: 2px;
 }
 .teacher-stage {
   display: grid;
