@@ -117,7 +117,7 @@ export function publicRoom(room) {
     feedbackMode: room.feedback_mode || "class_vote",
     aiFactCheck: Boolean(room.ai_fact_check),
     identityMode: room.identity_mode || "names",
-    hideIdentities: room.hide_identities !== false,
+    hideIdentities: room.hide_identities === true,
     timerEndsAt: room.timer_ends_at,
     timerRemaining: Number(room.timer_remaining || 0),
     timerRunning: Boolean(room.timer_running),
