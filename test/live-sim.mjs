@@ -18,6 +18,15 @@ let dashboard=await ok(`/rooms/${room.id}/teacher`,{token:teacher});
 assert.equal(dashboard.students.length,34);assert.ok(dashboard.joinUrl.endsWith(`/join/${room.joinCode}`));assert.ok(dashboard.qrDataUrl.startsWith("data:image/png;base64,"));
 
 await ok(`/rooms/${room.id}/control`,{method:"PATCH",token:teacher,body:{action:"start"}});
+dashboard=await ok(`/rooms/${room.id}/teacher`,{token:teacher});
+let firstStudentView=await ok(`/rooms/${room.id}/student`,{token:{"x-student-token":students[0].token}});
+assert.equal(firstStudentView.room.timerEndsAt,dashboard.room.timerEndsAt);
+const beforeAdd=new Date(dashboard.room.timerEndsAt).getTime();
+await ok(`/rooms/${room.id}/timer`,{method:"POST",token:teacher,body:{action:"add",seconds:30}});
+dashboard=await ok(`/rooms/${room.id}/teacher`,{token:teacher});
+firstStudentView=await ok(`/rooms/${room.id}/student`,{token:{"x-student-token":students[0].token}});
+assert.equal(firstStudentView.room.timerEndsAt,dashboard.room.timerEndsAt);
+assert.ok(new Date(dashboard.room.timerEndsAt).getTime()>=beforeAdd+29000);
 await Promise.all(students.map((s,i)=>ok(`/rooms/${room.id}/responses`,{method:"POST",token:{"x-student-token":s.token},body:{response:`In 1787, a new government framework for the United States was established when the Constitution was signed. Response ${i+1}.`}})));
 console.log("responses",students.length);
 dashboard=await ok(`/rooms/${room.id}/teacher`,{token:teacher});
@@ -32,7 +41,7 @@ studentView=await ok(`/rooms/${room.id}/student`,{token:{"x-student-token":stude
 await ok(`/rooms/${room.id}/control`,{method:"PATCH",token:teacher,body:{action:"end"}});
 await ok(`/rooms/${room.id}/control`,{method:"PATCH",token:teacher,body:{action:"vote"}});
 dashboard=await ok(`/rooms/${room.id}/teacher`,{token:teacher});assert.equal(dashboard.voteProgress.expected,34);assert.equal(dashboard.room.selectedIds.length,6);
-const late=await ok(`/rooms/${room.id}/join`,{method:"POST",body:{}});const lateView=await ok(`/rooms/${room.id}/student`,{token:{"x-student-token":late.token}});assert.equal(lateView.eligibleToVote,false);
+const late=await ok(`/rooms/${room.id}/join`,{method:"POST",body:{nickname:"Late Student"}});const lateView=await ok(`/rooms/${room.id}/student`,{token:{"x-student-token":late.token}});assert.equal(lateView.eligibleToVote,false);
 await ok(`/rooms/${room.id}/timer`,{method:"POST",token:teacher,body:{action:"start",seconds:300,autoClose:true}});
 const pairs=[dashboard.room.selectedIds.slice(0,2),dashboard.room.selectedIds.slice(2,4),dashboard.room.selectedIds.slice(4,6)];
 await Promise.all(students.flatMap(s=>pairs.map((pair,battleIndex)=>ok(`/rooms/${room.id}/vote`,{method:"POST",token:{"x-student-token":s.token},body:{responseId:pair[0],battleIndex}}))));
