@@ -57,7 +57,7 @@ const editKey = (roomId, studentId, round) =>
   `parafly-edit-${roomId}-${studentId}-${round}`;
 const joinUrl = (code) =>
   `${location.origin}/join?code=${encodeURIComponent(code)}`;
-let pollTimer, clockTimer;
+let pollTimer, clockTimer, teacherInteraction = false;
 const route = () => location.pathname.split("/").filter(Boolean);
 function setPage(html) {
   clearInterval(clockTimer);
@@ -115,6 +115,29 @@ async function create() {
     errEl = byId("err"),
     passagesEl = byId("passages"),
     summaryEl = byId("setupSummary");
+  const secondsInput = byId("seconds");
+  secondsInput.type = "hidden";
+  secondsInput.previousElementSibling.textContent = "Writing timer";
+  secondsInput.closest(".field").classList.add("setup-time-field");
+  secondsInput.insertAdjacentHTML(
+    "afterend",
+    `<div class="setup-clock" id="setupClock">1:00</div><div class="setup-time-buttons"><button type="button" class="timer-preset" data-setup-seconds="30">30s</button><button type="button" class="timer-preset active" data-setup-seconds="60">1m</button><button type="button" class="timer-preset" data-setup-seconds="120">2m</button><button type="button" class="timer-preset" data-setup-seconds="180">3m</button><button type="button" class="timer-preset" data-setup-seconds="300">5m</button></div><p class="muted">Teacher and students see the same countdown.</p>`,
+  );
+  const setupTimer = document.createElement("section");
+  setupTimer.className = "card setup-timer";
+  setupTimer.innerHTML = '<div><span class="section-label">WRITING TIMER</span><h2>Set the pace</h2><p class="muted">Choose the countdown students will receive for every passage.</p></div>';
+  const advancedOptions = secondsInput.closest("details");
+  advancedOptions.before(setupTimer);
+  setupTimer.append(secondsInput.closest(".field"));
+  document.querySelectorAll("[data-setup-seconds]").forEach((button) => {
+    button.onclick = () => {
+      document.querySelectorAll("[data-setup-seconds]").forEach((x) => x.classList.remove("active"));
+      button.classList.add("active");
+      const seconds = Number(button.dataset.setupSeconds);
+      secondsInput.value = seconds;
+      byId("setupClock").textContent = `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
+    };
+  });
   let passageCount = 1;
   const renderPassages = (seed) => {
     const old =
@@ -1221,7 +1244,9 @@ async function teacherPageV3(id) {
                     : r.phase === "summary"
                       ? '<button class="btn orange" data-action="finish">Finish ParaFLY</button>'
                       : "";
-      const timerPanel = timerMarkup(r, r.phase === "voting"),
+      const timerPanel = r.phase === "writing"
+          ? `<section class="timer-console"><div><span class="section-label">SHARED WRITING TIMER</span><div class="timer" id="sharedClock">--:--</div><p class="muted">Students see this exact countdown.</p></div><div class="timer-actions"><button class="timer-preset add-time" id="addThirty">+30 seconds</button></div></section>`
+          : timerMarkup(r, r.phase === "voting"),
         ballotStatus =
           roundResponses.length < 6
             ? `The 2+2+2 set needs 6 responses. ${roundResponses.length} available.`
@@ -1260,8 +1285,12 @@ async function teacherPageV3(id) {
                 )
               )
                 return;
-              await control(b.dataset.action);
-              load();
+              try {
+                await control(b.dataset.action);
+                await load();
+              } catch (error) {
+                toast(error.message);
+              }
             })),
       );
       byId("copyCode").onclick = () => copyText(r.joinCode);
@@ -1271,14 +1300,34 @@ async function teacherPageV3(id) {
       byId("fullscreenJoin").onclick = () =>
         byId("joinDialog").requestFullscreen?.();
       document.querySelectorAll("[data-score]").forEach((slider) => {
-        slider.oninput = () =>
-          (slider.previousElementSibling.querySelector("output").textContent =
-            slider.value);
-        slider.onchange = () =>
-          call(`/rooms/${id}/scores/${slider.dataset.score}`, "PUT", {
-            score: Number(slider.value),
-          }).then(load);
+        const begin = () => (teacherInteraction = true);
+        const finish = async () => {
+          if (!teacherInteraction) return;
+          teacherInteraction = false;
+          try {
+            await call(`/rooms/${id}/scores/${slider.dataset.score}`, "PUT", {
+              score: Number(slider.value),
+            });
+          } catch (error) {
+            toast(error.message);
+          }
+        };
+        slider.onpointerdown = begin;
+        slider.onpointerup = finish;
+        slider.onkeydown = begin;
+        slider.oninput = () => {
+          teacherInteraction = true;
+          slider.previousElementSibling.querySelector("output").textContent = slider.value;
+          slider.closest(".score-row").querySelector(".score-badge").textContent = `${slider.value}/10`;
+        };
+        slider.onchange = finish;
+        slider.onpointercancel = () => (teacherInteraction = false);
       });
+      if (byId("addThirty"))
+        byId("addThirty").onclick = () =>
+          call(`/rooms/${id}/timer`, "POST", { action: "add", seconds: 30 })
+            .then(load)
+            .catch((error) => toast(error.message));
       const build = byId("buildBallot");
       if (build) build.onclick = () => control("vote").then(load);
       const release = byId("releaseScores");
@@ -1349,6 +1398,7 @@ async function teacherPageV3(id) {
   await load();
   pollTimer = setInterval(() => {
     if (
+      !teacherInteraction &&
       !document.querySelector('input[type="range"]:active') &&
       !document.querySelector("dialog[open]")
     )
