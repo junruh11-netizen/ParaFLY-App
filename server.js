@@ -727,6 +727,12 @@ app.post("/api/rooms/:id/timer", async (req, res, next) => {
       if (remaining < 1) return fail(res, 409, "Set a timer first");
       endsAt = new Date(Date.now() + remaining * 1000);
       running = true;
+    } else if (action === "add") {
+      const seconds = Math.min(600, Math.max(1, Number(body.seconds) || 30));
+      const base = running && endsAt ? Math.max(Date.now(), new Date(endsAt).getTime()) : Date.now();
+      endsAt = new Date(base + seconds * 1000);
+      remaining = Math.max(0, Math.ceil((endsAt.getTime() - Date.now()) / 1000));
+      running = true;
     } else if (action === "clear") {
       remaining = 0;
       endsAt = null;
@@ -734,7 +740,7 @@ app.post("/api/rooms/:id/timer", async (req, res, next) => {
       autoClose = false;
     } else return fail(res, 400, "Unknown timer action");
     const updated = await one(
-      "UPDATE parafly_rooms SET timer_running=$1,timer_remaining=$2,timer_ends_at=$3,vote_auto_close=$4 WHERE id=$5 RETURNING *",
+      "UPDATE parafly_rooms SET timer_running=$1,timer_remaining=$2,timer_ends_at=$3,vote_auto_close=$4,ends_at=CASE WHEN phase='writing' THEN $3 ELSE ends_at END WHERE id=$5 RETURNING *",
       [running, remaining, endsAt, autoClose, room.id],
     );
     res.json(publicRoom(updated));
@@ -977,6 +983,9 @@ app.patch("/api/rooms/:id/control", async (req, res, next) => {
       endsAt = new Date(
         Math.max(Date.now(), new Date(endsAt).getTime()) + 30000,
       );
+      timerEndsAt = endsAt;
+      timerRemaining = Math.max(0, Math.ceil((timerEndsAt.getTime() - Date.now()) / 1000));
+      timerRunning = true;
     } else return fail(res, 400, "Unknown control");
     const updated = await one(
       "UPDATE parafly_rooms SET phase=$1,current_round=$2,ends_at=$3,selected_ids=$4,share_student_ids=$5,teacher_feedback=$6,model_response_id=$7,vote_expected_ids=$8,vote_closed=$9,timer_ends_at=$10,timer_remaining=$11,timer_running=$12 WHERE id=$13 RETURNING *",
