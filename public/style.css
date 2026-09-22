@@ -1717,14 +1717,9 @@ select:focus {
   touch-action: pan-y;
 }
 .score-row input[type="range"]:active { cursor: grabbing; }
-.setup-timer { display: flex; align-items: center; justify-content: space-between; gap: 28px; }
-.setup-timer .setup-time-field { min-width: min(100%, 430px); }
-.setup-clock { font-size: 42px; font-weight: 900; line-height: 1; margin: 8px 0 14px; }
-.setup-time-buttons { display: flex; flex-wrap: wrap; gap: 8px; }
 .timer-preset.active { background: var(--green); border-color: var(--green); color: #fff; }
 .add-time { min-width: 140px; }
 @media (max-width: 760px) {
-  .setup-timer { align-items: stretch; flex-direction: column; }
 }
 .empty-state {
   min-height: 150px;
