@@ -65,6 +65,11 @@ CREATE TABLE IF NOT EXISTS parafly_summaries (
  summary_text TEXT NOT NULL, ai_status TEXT NOT NULL DEFAULT 'not_used', ai_fact_count INTEGER,
  ai_feedback JSONB NOT NULL DEFAULT '{}', submitted_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), UNIQUE(student_id)
 );
+CREATE TABLE IF NOT EXISTS parafly_summary_scores (
+ room_id INTEGER NOT NULL REFERENCES parafly_rooms(id) ON DELETE CASCADE,
+ summary_id INTEGER PRIMARY KEY REFERENCES parafly_summaries(id) ON DELETE CASCADE,
+ score INTEGER NOT NULL CHECK(score BETWEEN 1 AND 10), scored_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
 CREATE TABLE IF NOT EXISTS parafly_ai_usage (
  student_id INTEGER PRIMARY KEY REFERENCES parafly_students(id) ON DELETE CASCADE,
  room_id INTEGER NOT NULL REFERENCES parafly_rooms(id) ON DELETE CASCADE,
@@ -91,6 +96,7 @@ ALTER TABLE parafly_rooms ADD COLUMN IF NOT EXISTS vote_expected_ids JSONB NOT N
 ALTER TABLE parafly_rooms ADD COLUMN IF NOT EXISTS vote_closed BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE parafly_rooms ADD COLUMN IF NOT EXISTS vote_auto_close BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE parafly_rooms ADD COLUMN IF NOT EXISTS scores_released_rounds JSONB NOT NULL DEFAULT '[]';
+ALTER TABLE parafly_rooms ADD COLUMN IF NOT EXISTS summary_scores_released BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE parafly_students ADD COLUMN IF NOT EXISTS real_name TEXT NOT NULL DEFAULT '';
 ALTER TABLE parafly_students ADD COLUMN IF NOT EXISTS alias TEXT NOT NULL DEFAULT '';
 UPDATE parafly_students SET real_name=nickname WHERE real_name='';
@@ -368,9 +374,15 @@ app.get("/api/rooms/:id/student", async (req, res, next) => {
       )
     ).rows;
     const summary = await one(
-      "SELECT summary_text,ai_status,ai_fact_count,ai_feedback,submitted_at FROM parafly_summaries WHERE student_id=$1",
+      "SELECT id,summary_text,ai_status,ai_fact_count,ai_feedback,submitted_at FROM parafly_summaries WHERE student_id=$1",
       [s.id],
     );
+    const releasedSummaryScore = room.summary_scores_released
+      ? await one(
+          "SELECT sc.score FROM parafly_summary_scores sc JOIN parafly_summaries x ON x.id=sc.summary_id WHERE x.student_id=$1 AND x.room_id=$2",
+          [s.id, room.id],
+        )
+      : null;
     let exemplars = [],
       results = [],
       criteria = [];
@@ -448,6 +460,7 @@ app.get("/api/rooms/:id/student", async (req, res, next) => {
       criteria,
       myVotes,
       releasedScores,
+      releasedSummaryScore: releasedSummaryScore?.score ?? null,
       voteProgress: {
         submitted: voteCount?.count || 0,
         completed: voteCompleted?.count || 0,
@@ -594,13 +607,19 @@ app.get("/api/rooms/:id/teacher", async (req, res, next) => {
     ).rows;
     const summaries = (
       await db.query(
-        "SELECT x.student_id,x.summary_text,x.ai_status,x.ai_fact_count,x.ai_feedback,x.submitted_at,s.nickname,s.real_name,s.alias FROM parafly_summaries x JOIN parafly_students s ON s.id=x.student_id WHERE x.room_id=$1 ORDER BY x.submitted_at",
+        "SELECT x.id,x.student_id,x.summary_text,x.ai_status,x.ai_fact_count,x.ai_feedback,x.submitted_at,s.nickname,s.real_name,s.alias FROM parafly_summaries x JOIN parafly_students s ON s.id=x.student_id WHERE x.room_id=$1 ORDER BY x.submitted_at",
         [room.id],
       )
     ).rows.map((x) => ({ ...x, display_name: displayName(room, x) }));
     const scores = (
       await db.query(
         "SELECT response_id,score FROM parafly_response_scores WHERE room_id=$1",
+        [room.id],
+      )
+    ).rows;
+    const summaryScores = (
+      await db.query(
+        "SELECT summary_id,score FROM parafly_summary_scores WHERE room_id=$1",
         [room.id],
       )
     ).rows;
@@ -639,6 +658,7 @@ app.get("/api/rooms/:id/teacher", async (req, res, next) => {
       votes,
       voteCriteria: voteCriteriaRows,
       scores,
+      summaryScores,
       voteProgress: {
         ...(voteProgress ?? { started: 0, submitted: 0, completed: 0 }),
         expected,
@@ -682,6 +702,47 @@ app.put("/api/rooms/:id/scores/:responseId", async (req, res, next) => {
   }
 });
 
+app.put("/api/rooms/:id/summary-scores/:summaryId", async (req, res, next) => {
+  try {
+    const room = await teacher(req, res);
+    if (!room) return;
+    if (room.phase !== "summary")
+      return fail(res, 409, "Summaries can only be scored during the final summary stage");
+    const summaryId = Number(req.params.summaryId),
+      score = Number(bodyOf(req).score);
+    if (!Number.isInteger(score) || score < 1 || score > 10)
+      return fail(res, 400, "Choose a score from 1 to 10");
+    const valid = await one(
+      "SELECT id FROM parafly_summaries WHERE id=$1 AND room_id=$2",
+      [summaryId, room.id],
+    );
+    if (!valid) return fail(res, 404, "Summary not found");
+    await db.query(
+      `INSERT INTO parafly_summary_scores(room_id,summary_id,score) VALUES($1,$2,$3)
+       ON CONFLICT(summary_id) DO UPDATE SET score=EXCLUDED.score,scored_at=NOW()`,
+      [room.id, summaryId, score],
+    );
+    res.json({ ok: true });
+  } catch (e) {
+    next(e);
+  }
+});
+
+app.post("/api/rooms/:id/summary-scores/release", async (req, res, next) => {
+  try {
+    const room = await teacher(req, res);
+    if (!room) return;
+    const release = bodyOf(req).release !== false;
+    const updated = await one(
+      "UPDATE parafly_rooms SET summary_scores_released=$1 WHERE id=$2 RETURNING *",
+      [release, room.id],
+    );
+    res.json(publicRoom(updated));
+  } catch (e) {
+    next(e);
+  }
+});
+
 app.patch("/api/rooms/:id/settings", async (req, res, next) => {
   try {
     const room = await teacher(req, res);
@@ -705,6 +766,8 @@ app.post("/api/rooms/:id/timer", async (req, res, next) => {
   try {
     const room = await teacher(req, res);
     if (!room) return;
+    if (!["writing", "voting"].includes(room.phase))
+      return fail(res, 409, "The timer is available only during writing and voting");
     const body = bodyOf(req),
       action = String(body.action || "");
     let running = room.timer_running,
@@ -798,13 +861,13 @@ app.patch("/api/rooms/:id/control", async (req, res, next) => {
         return fail(res, 409, "The activity has already started");
       round = 0;
       phase = "writing";
-      endsAt = new Date(Date.now() + room.seconds_per_round * 1000);
+      endsAt = null;
       selected = [];
       teacherFeedback = "";
       modelResponseId = null;
-      timerRemaining = room.seconds_per_round;
-      timerEndsAt = endsAt;
-      timerRunning = true;
+      timerRemaining = 0;
+      timerEndsAt = null;
+      timerRunning = false;
     } else if (action === "end") {
       if (phase !== "writing")
         return fail(res, 409, "No writing round is open");
@@ -817,16 +880,18 @@ app.patch("/api/rooms/:id/control", async (req, res, next) => {
       if (phase !== "review")
         return fail(res, 409, "Only a locked writing round can be reopened");
       phase = "writing";
-      endsAt = new Date(Date.now() + room.seconds_per_round * 1000);
+      endsAt = null;
       selected = [];
       teacherFeedback = "";
       modelResponseId = null;
-      timerRemaining = room.seconds_per_round;
-      timerEndsAt = endsAt;
-      timerRunning = true;
+      timerRemaining = 0;
+      timerEndsAt = null;
+      timerRunning = false;
     } else if (action === "skip") {
       if (phase !== "review")
         return fail(res, 409, "Feedback can only be skipped during review");
+      if (!Array.isArray(room.scores_released_rounds) || !room.scores_released_rounds.includes(round))
+        return fail(res, 409, `Release the Passage ${round + 1} scores before moving on`);
       if (round + 1 >= room.paragraphs.length) {
         phase = "summary";
         endsAt = null;
@@ -836,13 +901,13 @@ app.patch("/api/rooms/:id/control", async (req, res, next) => {
       } else {
         round++;
         phase = "writing";
-        endsAt = new Date(Date.now() + room.seconds_per_round * 1000);
+        endsAt = null;
         selected = [];
         teacherFeedback = "";
         modelResponseId = null;
-        timerRemaining = room.seconds_per_round;
-        timerEndsAt = endsAt;
-        timerRunning = true;
+        timerRemaining = 0;
+        timerEndsAt = null;
+        timerRunning = false;
       }
     } else if (action === "vote") {
       if (phase !== "review")
@@ -920,19 +985,6 @@ app.patch("/api/rooms/:id/control", async (req, res, next) => {
       timerEndsAt = endsAt;
       timerRemaining = 45;
       timerRunning = true;
-    } else if (action === "reopenVote") {
-      if (phase !== "voting") return fail(res, 409, "Voting is not active");
-      voteClosed = false;
-    } else if (action === "resetBattle") {
-      if (phase !== "voting") return fail(res, 409, "Voting is not active");
-      const battle = Number(body.battleIndex);
-      if (!Number.isInteger(battle) || battle < 0 || battle > 2)
-        return fail(res, 400, "Invalid battle");
-      await db.query(
-        "DELETE FROM parafly_votes WHERE room_id=$1 AND round_index=$2 AND battle_index=$3",
-        [room.id, round, battle],
-      );
-      voteClosed = false;
     } else if (action === "share") {
       if (phase !== "results")
         return fail(res, 409, "Start sharing after the think-pair-share");
@@ -951,6 +1003,8 @@ app.patch("/api/rooms/:id/control", async (req, res, next) => {
     } else if (action === "next") {
       if (phase !== "sharing")
         return fail(res, 409, "Complete sharing before continuing");
+      if (!Array.isArray(room.scores_released_rounds) || !room.scores_released_rounds.includes(round))
+        return fail(res, 409, `Release the Passage ${round + 1} scores before moving on`);
       if (round + 1 >= room.paragraphs.length) {
         phase = "summary";
         endsAt = null;
@@ -960,18 +1014,20 @@ app.patch("/api/rooms/:id/control", async (req, res, next) => {
       } else {
         round++;
         phase = "writing";
-        endsAt = new Date(Date.now() + room.seconds_per_round * 1000);
+        endsAt = null;
         selected = [];
         shareStudentIds = [];
         teacherFeedback = "";
         modelResponseId = null;
-        timerRemaining = room.seconds_per_round;
-        timerEndsAt = endsAt;
-        timerRunning = true;
+        timerRemaining = 0;
+        timerEndsAt = null;
+        timerRunning = false;
       }
     } else if (action === "finish") {
       if (phase !== "summary")
         return fail(res, 409, "The final summary is not open");
+      if (!room.summary_scores_released)
+        return fail(res, 409, "Release the final summary scores before finishing ParaFLY");
       phase = "complete";
       endsAt = null;
       timerEndsAt = null;
