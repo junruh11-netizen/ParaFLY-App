@@ -20,6 +20,13 @@ assert.equal(dashboard.students.length,34);assert.ok(dashboard.joinUrl.endsWith(
 await ok(`/rooms/${room.id}/control`,{method:"PATCH",token:teacher,body:{action:"start"}});
 dashboard=await ok(`/rooms/${room.id}/teacher`,{token:teacher});
 let firstStudentView=await ok(`/rooms/${room.id}/student`,{token:{"x-student-token":students[0].token}});
+assert.equal(dashboard.room.timerRunning,false);
+assert.equal(dashboard.room.timerEndsAt,null);
+assert.equal(firstStudentView.room.timerEndsAt,dashboard.room.timerEndsAt);
+await ok(`/rooms/${room.id}/timer`,{method:"POST",token:teacher,body:{action:"start",seconds:60}});
+dashboard=await ok(`/rooms/${room.id}/teacher`,{token:teacher});
+firstStudentView=await ok(`/rooms/${room.id}/student`,{token:{"x-student-token":students[0].token}});
+assert.equal(dashboard.room.timerRunning,true);
 assert.equal(firstStudentView.room.timerEndsAt,dashboard.room.timerEndsAt);
 const beforeAdd=new Date(dashboard.room.timerEndsAt).getTime();
 await ok(`/rooms/${room.id}/timer`,{method:"POST",token:teacher,body:{action:"add",seconds:30}});
@@ -37,6 +44,7 @@ await ok(`/rooms/${room.id}/scores/release`,{method:"POST",token:teacher,body:{r
 studentView=await ok(`/rooms/${room.id}/student`,{token:{"x-student-token":students[0].token}});assert.equal(studentView.releasedScores.length,1);
 await ok(`/rooms/${room.id}/scores/release`,{method:"POST",token:teacher,body:{round:0,release:false}});
 studentView=await ok(`/rooms/${room.id}/student`,{token:{"x-student-token":students[0].token}});assert.equal(studentView.releasedScores.length,0);
+await ok(`/rooms/${room.id}/scores/release`,{method:"POST",token:teacher,body:{round:0,release:true}});
 
 await ok(`/rooms/${room.id}/control`,{method:"PATCH",token:teacher,body:{action:"end"}});
 await ok(`/rooms/${room.id}/control`,{method:"PATCH",token:teacher,body:{action:"vote"}});
@@ -54,5 +62,13 @@ await ok(`/rooms/${room.id}/timer`,{method:"POST",token:teacher,body:{action:"cl
 await ok(`/rooms/${room.id}/control`,{method:"PATCH",token:teacher,body:{action:"results"}});await ok(`/rooms/${room.id}/control`,{method:"PATCH",token:teacher,body:{action:"share"}});await ok(`/rooms/${room.id}/control`,{method:"PATCH",token:teacher,body:{action:"next"}});
 await Promise.all(students.map(s=>ok(`/rooms/${room.id}/summary`,{method:"POST",token:{"x-student-token":s.token},body:{summary:"The Constitution was signed in 1787. It created a framework for the United States government. That framework established a new national government.",includesThreeFacts:true}})));
 console.log("summaries",students.length);
+dashboard=await ok(`/rooms/${room.id}/teacher`,{token:teacher});
+assert.equal(dashboard.summaries.length,34);
+assert.equal(dashboard.room.shareStudentIds.length,2);
+await Promise.all(dashboard.summaries.map((s,i)=>ok(`/rooms/${room.id}/summary-scores/${s.id}`,{method:"PUT",token:teacher,body:{score:i%10+1}})));
+let blocked=await request(`/rooms/${room.id}/control`,{method:"PATCH",token:teacher,body:{action:"finish"}});assert.equal(blocked.status,409);
+studentView=await ok(`/rooms/${room.id}/student`,{token:{"x-student-token":students[0].token}});assert.equal(studentView.releasedSummaryScore,null);
+await ok(`/rooms/${room.id}/summary-scores/release`,{method:"POST",token:teacher,body:{release:true}});
+studentView=await ok(`/rooms/${room.id}/student`,{token:{"x-student-token":students[0].token}});assert.ok(Number.isInteger(studentView.releasedSummaryScore));
 await ok(`/rooms/${room.id}/control`,{method:"PATCH",token:teacher,body:{action:"finish"}});
 console.log(JSON.stringify({ok:true,roomId:room.id,code:room.joinCode,students:students.length,totalVotes:102,joinUrl:dashboard.joinUrl}));
