@@ -35,6 +35,7 @@ test("legacy rooms receive safe identity, timer, voting, and score defaults", ()
   assert.equal(room.voteExpected, 0);
   assert.equal(room.voteClosed, false);
   assert.deepEqual(room.scoresReleasedRounds, []);
+  assert.equal(room.summaryScoresReleased, false);
 });
 test("teacher pick feedback is exposed to clients", () =>
   assert.equal(
