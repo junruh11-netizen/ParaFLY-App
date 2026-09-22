@@ -129,6 +129,7 @@ export function publicRoom(room) {
     scoresReleasedRounds: Array.isArray(room.scores_released_rounds)
       ? room.scores_released_rounds
       : [],
+    summaryScoresReleased: Boolean(room.summary_scores_released),
   };
 }
 
