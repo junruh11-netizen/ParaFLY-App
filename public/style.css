@@ -1841,3 +1841,6 @@ select:focus {
     margin: auto;
   }
 }
+
+
+#studentTimer[hidden], #connectionNotice[hidden] { display: none; }

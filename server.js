@@ -1113,26 +1113,26 @@ app.get("/api/rooms/:id/export", async (req, res, next) => {
     if (!room) return;
     const rows = (
       await db.query(
-        "SELECT s.nickname,r.round_index,r.response_text FROM parafly_responses r JOIN parafly_students s ON s.id=r.student_id WHERE r.room_id=$1 ORDER BY s.nickname,r.round_index",
+        "SELECT s.nickname,r.round_index,r.response_text,sc.score FROM parafly_responses r JOIN parafly_students s ON s.id=r.student_id LEFT JOIN parafly_response_scores sc ON sc.response_id=r.id WHERE r.room_id=$1 ORDER BY s.nickname,r.round_index",
         [room.id],
       )
     ).rows;
     const summaries = (
       await db.query(
-        "SELECT s.nickname,x.summary_text FROM parafly_summaries x JOIN parafly_students s ON s.id=x.student_id WHERE x.room_id=$1 ORDER BY s.nickname",
+        "SELECT s.nickname,x.summary_text,sc.score FROM parafly_summaries x JOIN parafly_students s ON s.id=x.student_id LEFT JOIN parafly_summary_scores sc ON sc.summary_id=x.id WHERE x.room_id=$1 ORDER BY s.nickname",
         [room.id],
       )
     ).rows;
     const csv = [
-      "Nickname,Round,Response",
+      "Student name,Task,Answer,Grade (out of 10),Grading status",
       ...rows.map((r) =>
-        [r.nickname, r.round_index + 1, r.response_text].map(csvCell).join(","),
+        [r.nickname, `Passage ${r.round_index + 1}`, r.response_text, r.score, r.score == null ? "Ungraded" : "Graded"].map(csvCell).join(","),
       ),
       ...summaries.map((x) =>
-        [x.nickname, "Final Summary", x.summary_text].map(csvCell).join(","),
+        [x.nickname, "Final Summary", x.summary_text, x.score, x.score == null ? "Ungraded" : "Graded"].map(csvCell).join(","),
       ),
-    ].join("\n");
-    res.type("text/csv").attachment("parafly-responses.csv").send(csv);
+    ].join("\r\n");
+    res.type("text/csv; charset=utf-8").attachment("parafly-answers-and-grades.csv").send("\uFEFF" + csv);
   } catch (e) {
     next(e);
   }
@@ -1148,3 +1148,4 @@ app.get("/{*splat}", (_req, res) =>
   res.sendFile(new URL("./public/index.html", import.meta.url).pathname),
 );
 app.listen(port, () => console.log(`ParaFLY listening on ${port}`));
+

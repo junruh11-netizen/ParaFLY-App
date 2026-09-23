@@ -57,7 +57,7 @@ const editKey = (roomId, studentId, round) =>
   `parafly-edit-${roomId}-${studentId}-${round}`;
 const joinUrl = (code) =>
   `${location.origin}/join?code=${encodeURIComponent(code)}`;
-let pollTimer, clockTimer, teacherInteraction = false;
+let pollTimer, clockTimer, teacherInteraction = false, renderVersion = 0;
 const route = () => location.pathname.split("/").filter(Boolean);
 function setPage(html) {
   clearInterval(clockTimer);
@@ -1033,11 +1033,46 @@ const timerMarkup = (r, voting = false, writing = false) =>
 async function studentPageV3(id) {
   const session = store.get("parafly-student");
   if (!session || session.roomId !== id) return go("/join");
-  let renderKey = "";
+  let renderKey = "", loading = false;
+  const pageVersion = renderVersion;
+  const active = () => pageVersion === renderVersion;
+  const drafts = new Map();
+  const bindDraft = (fieldId, round) => {
+    const field = byId(fieldId);
+    if (!field) return;
+    const key = draftKey(id, session.studentId || session.token, round);
+    const saved = drafts.get(key) || store.get(key);
+    if (saved) {
+      field.value = saved.text || "";
+      if (byId("threeFacts")) byId("threeFacts").checked = Boolean(saved.confirmed);
+    }
+    const save = () => {
+      const value = { text: field.value, confirmed: byId("threeFacts")?.checked };
+      drafts.set(key, value);
+      try { store.set(key, value); } catch { /* Keep the in-memory draft if storage is unavailable. */ }
+    };
+    field.oninput = save;
+    if (byId("threeFacts")) byId("threeFacts").onchange = save;
+  };
+  const updateTimer = (r) => {
+    const holder = byId("studentTimer");
+    if (!holder) return;
+    clearInterval(clockTimer);
+    holder.hidden = !r.timerRunning && !r.timerRemaining;
+    const clock = holder.querySelector(".timer");
+    if (r.timerRunning && r.timerEndsAt) clockTimer = countdown(r.timerEndsAt, clock);
+    else {
+      const seconds = Math.max(0, Number(r.timerRemaining) || 0);
+      clock.textContent = `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")} (paused)`;
+    }
+  };
   const load = async () => {
+    if (loading || !active()) return;
+    loading = true;
     try {
       const s = await api(`/rooms/${id}/student`, {
           headers: { "x-student-token": session.token },
+          signal: AbortSignal.timeout(15000),
         }),
         r = s.room,
         mine = s.mine.find((x) => x.round_index === r.currentRound),
@@ -1051,22 +1086,22 @@ async function studentPageV3(id) {
           Boolean(mine),
           s.myVotes.length,
           r.voteClosed,
-          r.timerEndsAt,
-          r.timerRemaining,
+          Boolean(s.summary),
           JSON.stringify(s.releasedScores),
           s.releasedSummaryScore,
           s.voteProgress?.submitted,
         ].join("|");
-      if (key === renderKey) return;
+      if (!active()) return;
+      const notice = byId("connectionNotice");
+      if (notice) notice.hidden = true;
+      if (key === renderKey) { updateTimer(r); return; }
       renderKey = key;
       const scoreNotice = released.has(r.currentRound)
         ? `<aside class="released-score"><span>YOUR SCORE</span><b>${released.get(r.currentRound)}/10</b><p>Use the ParaFLY Check to understand the score. Only you can see this.</p></aside>`
         : r.currentRound >= 0
           ? '<p class="score-waiting">Your score is hidden until your teacher releases it.</p>'
           : "";
-      const timer = timerEnd
-        ? `<div class="student-live-timer"><span>${r.phase === "voting" ? "VOTING TIME" : "TIME"}</span><div class="timer" id="clock">--:--</div></div>`
-        : "";
+      const timer = `<div class="student-live-timer" id="studentTimer" hidden><span>${r.phase === "voting" ? "VOTING TIME" : "TIME"}</span><div class="timer">--:--</div></div>`;
       let body = "";
       if (r.phase === "lobby")
         body = `<div class="card"><span class="pill">YOU’RE IN</span><h2>Welcome, ${esc(s.student.nickname)}.</h2><p>Waiting for your teacher to begin.</p>${criteriaGuide()}</div>`;
@@ -1101,7 +1136,10 @@ async function studentPageV3(id) {
         body = `${timer}<div class="card"><span class="pill">FINAL OWNERSHIP TASK</span><h2>Bring your thinking together</h2>${criteriaGuide()}${s.summary ? `<div class="response selected"><b>Final summary sent</b><p>${esc(s.summary.summary_text)}</p></div>${s.releasedSummaryScore != null ? `<aside class="released-score"><span>SUMMARY SCORE</span><b>${s.releasedSummaryScore}/10</b><p>Only you can see this score.</p></aside>` : '<p class="score-waiting">Your summary score is hidden until your teacher releases it.</p>'}` : `<form id="summaryForm"><textarea id="summaryAnswer" required minlength="20" maxlength="5000" placeholder="Write a summary with at least three facts..."></textarea><label class="confirm"><input id="threeFacts" type="checkbox" required> My summary includes at least three accurate facts.</label><p id="err"></p><button class="btn orange">Submit final summary</button></form>`}</div>`;
       if (r.phase === "complete")
         body = `<div class="card"><h2>Flight complete</h2>${criteriaGuide()}${s.mine.map((x, i) => `<div class="response"><b>Passage ${i + 1}${released.has(i) ? ` · Score ${released.get(i)}/10` : ""}</b><p>${esc(x.response_text)}</p></div>`).join("")}${s.summary ? `<div class="response"><b>Final summary${s.releasedSummaryScore != null ? ` · Score ${s.releasedSummaryScore}/10` : ""}</b><p>${esc(s.summary.summary_text)}</p></div>` : ""}</div>`;
-      setPage(`<h1>${esc(r.title)}</h1>${roundBar(r)}${body}`);
+      setPage(`<p id="connectionNotice" class="error" role="status" hidden></p><h1>${esc(r.title)}</h1>${roundBar(r)}${body}`);
+      updateTimer(r);
+      bindDraft("answer", r.currentRound);
+      bindDraft("summaryAnswer", "summary");
       const clock = byId("clock");
       if (clock) {
         const end = timerEnd || r.endsAt;
@@ -1120,8 +1158,8 @@ async function studentPageV3(id) {
             renderKey = "";
             load();
           } catch (x) {
-            byId("err").className = "error";
-            byId("err").textContent = x.message;
+            const error = e.currentTarget?.querySelector("#err") || byId("err");
+            if (error) { error.className = "error"; error.textContent = `${x.message}. Your draft is kept here; please try again.`; }
           }
         };
       document.querySelectorAll("[data-vote]").forEach(
@@ -1161,16 +1199,25 @@ async function studentPageV3(id) {
             renderKey = "";
             load();
           } catch (x) {
-            byId("err").className = "error";
-            byId("err").textContent = x.message;
+            const error = e.currentTarget?.querySelector("#err") || byId("err");
+            if (error) { error.className = "error"; error.textContent = `${x.message}. Your draft is kept here; please try again.`; }
           }
         };
     } catch (e) {
-      setPage(`<p class="error">${esc(e.message)}</p>`);
+      if (!active()) return;
+      let notice = byId("connectionNotice");
+      if (!notice) {
+        setPage('<p id="connectionNotice" class="error" role="status"></p>');
+        notice = byId("connectionNotice");
+      }
+      notice.hidden = false;
+      notice.textContent = "Connection interrupted. Reconnecting automatically… Keep this page open; your writing stays here.";
+    } finally {
+      loading = false;
     }
   };
   await load();
-  pollTimer = setInterval(load, 2000);
+  if (active()) pollTimer = setInterval(load, 2000);
 }
 
 async function teacherPageV3(id) {
@@ -1266,7 +1313,7 @@ async function teacherPageV3(id) {
         complete: "ParaFLY complete",
       }[r.phase];
       setPage(
-        `<section class="session-card"><button class="join-code" id="copyCode" title="Copy class code">${esc(r.joinCode)}</button><div class="session-copy"><span class="section-label">PARAFLY LIVE</span><h1>${esc(r.title)}</h1><p>${d.students.length} joined · ${r.phase === "summary" ? d.summaries.length : roundResponses.length} sent · Passage ${Math.max(1, r.currentRound + 1)} of ${r.paragraphCount}</p></div><div class="session-actions"><label class="nickname-toggle" title="Switch teacher-facing student labels between real names and assigned nicknames"><input id="showNicknames" type="checkbox" ${r.hideIdentities ? "checked" : ""}><span class="toggle-track"></span><b>Show nicknames</b></label><button class="btn secondary" id="copyJoin">Copy student link</button><button class="btn secondary" id="projectJoin">Project join screen</button>${controls}</div></section>${roundBar(r)}<div class="teacher-stage"><section class="card current-step"><span class="section-label">CURRENT STEP</span><h2>${phaseTitle}</h2>${r.currentRound >= 0 && !["summary", "complete"].includes(r.phase) ? `<div class="passage">${esc(r.paragraphs[r.currentRound])}</div>` : ""}${criteriaGuide()}</section><aside class="gauge-panel">${gaugeMarkup(average, activeScored.length)}</aside></div>${timerPanel}${votingPanel}${sharerPanel}${releaseReminder}${scorePanel}${summaryPanel}<section class="card roster-card"><h2>Student status</h2><div class="status-list">${d.students.map((x) => `<span class="student-chip ${(r.phase === "summary" ? d.summaries.some((s) => s.student_id === x.id) : submittedIds.has(x.id)) ? "done" : ""}">${esc(x.display_name)} ${(r.phase === "summary" ? d.summaries.some((s) => s.student_id === x.id) : submittedIds.has(x.id)) ? "✓" : ""}</span>`).join("") || "No students yet."}</div></section><dialog id="joinDialog" class="app-dialog projector-dialog"><button class="dialog-close" id="closeJoin" aria-label="Close">×</button><div class="projector-content"><span class="section-label">JOIN CODE</span><div class="project-code">${esc(r.joinCode)}</div><img class="join-qr" src="${d.qrDataUrl}" alt="QR code for the student join link"><p>Scan the QR code, or open:</p><h2 class="join-url">${esc(d.joinUrl)}</h2><button class="btn secondary" id="fullscreenJoin">Fullscreen</button></div></dialog>`,
+        `<section class="session-card"><button class="join-code" id="copyCode" title="Copy class code">${esc(r.joinCode)}</button><div class="session-copy"><span class="section-label">PARAFLY LIVE</span><h1>${esc(r.title)}</h1><p>${d.students.length} joined · ${r.phase === "summary" ? d.summaries.length : roundResponses.length} sent · Passage ${Math.max(1, r.currentRound + 1)} of ${r.paragraphCount}</p></div><div class="session-actions"><label class="nickname-toggle" title="Switch teacher-facing student labels between real names and assigned nicknames"><input id="showNicknames" type="checkbox" ${r.hideIdentities ? "checked" : ""}><span class="toggle-track"></span><b>Show nicknames</b></label><button class="btn secondary" id="exportGrades">Export answers &amp; grades</button><button class="btn secondary" id="copyJoin">Copy student link</button><button class="btn secondary" id="projectJoin">Project join screen</button>${controls}</div></section>${roundBar(r)}<div class="teacher-stage"><section class="card current-step"><span class="section-label">CURRENT STEP</span><h2>${phaseTitle}</h2>${r.currentRound >= 0 && !["summary", "complete"].includes(r.phase) ? `<div class="passage">${esc(r.paragraphs[r.currentRound])}</div>` : ""}${criteriaGuide()}</section><aside class="gauge-panel">${gaugeMarkup(average, activeScored.length)}</aside></div>${timerPanel}${votingPanel}${sharerPanel}${releaseReminder}${scorePanel}${summaryPanel}<section class="card roster-card"><h2>Student status</h2><div class="status-list">${d.students.map((x) => `<span class="student-chip ${(r.phase === "summary" ? d.summaries.some((s) => s.student_id === x.id) : submittedIds.has(x.id)) ? "done" : ""}">${esc(x.display_name)} ${(r.phase === "summary" ? d.summaries.some((s) => s.student_id === x.id) : submittedIds.has(x.id)) ? "✓" : ""}</span>`).join("") || "No students yet."}</div></section><dialog id="joinDialog" class="app-dialog projector-dialog"><button class="dialog-close" id="closeJoin" aria-label="Close">×</button><div class="projector-content"><span class="section-label">JOIN CODE</span><div class="project-code">${esc(r.joinCode)}</div><img class="join-qr" src="${d.qrDataUrl}" alt="QR code for the student join link"><p>Scan the QR code, or open:</p><h2 class="join-url">${esc(d.joinUrl)}</h2><button class="btn secondary" id="fullscreenJoin">Fullscreen</button></div></dialog>`,
       );
       document.querySelectorAll("[data-action]").forEach(
         (b) =>
@@ -1288,6 +1335,20 @@ async function teacherPageV3(id) {
               }
             })),
       );
+      byId("exportGrades").onclick = (event) => withBusy(event.currentTarget, async () => {
+        try {
+          const response = await fetch(`/api/rooms/${id}/export`, { headers });
+          if (!response.ok) throw Error("Export failed. Please try again.");
+          const url = URL.createObjectURL(await response.blob());
+          const link = document.createElement("a");
+          link.href = url;
+          link.download = `parafly-${r.joinCode}-answers-and-grades.csv`;
+          document.body.append(link);
+          link.click();
+          link.remove();
+          setTimeout(() => URL.revokeObjectURL(url), 1000);
+        } catch (error) { toast(error.message); }
+      });
       byId("copyCode").onclick = () => copyText(r.joinCode);
       byId("copyJoin").onclick = () => copyText(d.joinUrl);
       byId("projectJoin").onclick = () => byId("joinDialog").showModal();
@@ -1400,6 +1461,7 @@ async function teacherPageV3(id) {
 }
 
 function render() {
+  renderVersion++;
   clearInterval(pollTimer);
   clearInterval(clockTimer);
   const [a, b] = route();
@@ -1411,3 +1473,4 @@ function render() {
   home();
 }
 render();
+
