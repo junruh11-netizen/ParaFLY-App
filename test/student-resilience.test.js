@@ -73,3 +73,19 @@ test('drafts survive score rerenders, phase reopening and refresh; summary draft
   assert.equal(restored.w.document.getElementById('threeFacts').checked,true);
   restored.close();
 });
+test('unsubmit restores submitted passage and summary text even without a local draft', async () => {
+ const h=await setup();
+ h.state.mine=[{id:9,round_index:0,response_text:'My submitted response'}];await h.poll();
+ const original=h.w.fetch;
+ h.w.fetch=async(url,options)=>{
+  if(url.endsWith('/responses/unsubmit')){h.state.mine=[];return {ok:true,json:async()=>({ok:true})};}
+  if(url.endsWith('/summary/unsubmit')){h.state.summary=null;return {ok:true,json:async()=>({ok:true})};}
+  return original(url,options);
+ };
+ h.w.document.getElementById('unsubmitResponse').click();await flush();await flush();
+ assert.equal(h.w.document.getElementById('answer').value,'My submitted response');
+ h.state.room.phase='summary';h.state.summary={summary_text:'My complete submitted summary with three facts.'};await h.poll();
+ h.w.document.getElementById('unsubmitSummary').click();await flush();await flush();
+ assert.equal(h.w.document.getElementById('summaryAnswer').value,'My complete submitted summary with three facts.');
+ assert.equal(h.w.document.getElementById('threeFacts').checked,true);h.close();
+});

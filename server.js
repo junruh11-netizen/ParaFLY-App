@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { AsyncLocalStorage } from "node:async_hooks";
 import express from "express";
 import pg from "pg";
 import QRCode from "qrcode";
@@ -17,13 +18,49 @@ const { Pool } = pg;
 const app = express();
 const port = Number(process.env.PORT || 3000);
 if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL is required");
-const db = new Pool({
+const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl:
     process.env.NODE_ENV === "production"
       ? { rejectUnauthorized: false }
       : false,
 });
+
+// All writes for a room use one transaction and row lock. A timer update,
+// scoring request or student submission cannot race a phase transition.
+const requestDb = new AsyncLocalStorage();
+const db = { query: (...args) => (requestDb.getStore() || pool).query(...args) };
+const roomWrite = (handler) => async (req, res, next) => {
+  let client;
+  const sendJson = res.json;
+  let payload, hasPayload = false;
+  try {
+    client = await pool.connect();
+    await client.query("BEGIN");
+    await client.query("SELECT id FROM parafly_rooms WHERE id=$1 FOR UPDATE", [req.params.id]);
+    // Do not acknowledge success before the transaction is durable.
+    res.json = (value) => { payload = value; hasPayload = true; return res; };
+    await requestDb.run(client, () => handler(req, res, (error) => { throw error; }));
+    await client.query(res.statusCode >= 400 ? "ROLLBACK" : "COMMIT");
+    res.json = sendJson;
+    if (hasPayload) res.json(payload);
+  } catch (error) {
+    if (client) await client.query("ROLLBACK").catch(() => {});
+    res.json = sendJson;
+    next(error);
+  } finally {
+    client?.release();
+  }
+};
+const matchesStep = (req, res, room) => {
+  const body = bodyOf(req);
+  if ((body.round != null && Number(body.round) !== room.current_round) ||
+      (body.phase != null && body.phase !== room.phase)) {
+    fail(res, 409, "The activity has moved to another step. Refresh and try again.");
+    return false;
+  }
+  return true;
+};
 
 app.use(express.json({ limit: "1mb" }));
 app.use("/api", (_req, res, next) => {
@@ -236,10 +273,10 @@ async function closeExpiredVote(room) {
     room.timer_ends_at &&
     new Date(room.timer_ends_at) <= new Date()
   ) {
-    return await one(
-      "UPDATE parafly_rooms SET vote_closed=TRUE,timer_running=FALSE,timer_remaining=0 WHERE id=$1 RETURNING *",
+    return (await one(
+      "UPDATE parafly_rooms SET vote_closed=TRUE,timer_running=FALSE,timer_remaining=0 WHERE id=$1 AND phase='voting' AND vote_auto_close=TRUE AND timer_running=TRUE AND timer_ends_at<=NOW() RETURNING *",
       [room.id],
-    );
+    )) || await roomById(room.id);
   }
   return room;
 }
@@ -316,7 +353,7 @@ app.get("/api/rooms/code/:code", async (req, res, next) => {
   }
 });
 
-app.post("/api/rooms/:id/join", async (req, res, next) => {
+app.post("/api/rooms/:id/join", roomWrite(async (req, res, next) => {
   try {
     const room = await roomById(req.params.id);
     if (!room || room.phase === "complete")
@@ -358,7 +395,7 @@ app.post("/api/rooms/:id/join", async (req, res, next) => {
       return fail(res, 409, "That nickname is already in use");
     next(e);
   }
-});
+}));
 
 app.get("/api/rooms/:id/student", async (req, res, next) => {
   try {
@@ -477,13 +514,14 @@ app.get("/api/rooms/:id/student", async (req, res, next) => {
   }
 });
 
-app.post("/api/rooms/:id/responses", async (req, res, next) => {
+app.post("/api/rooms/:id/responses", roomWrite(async (req, res, next) => {
   try {
     const s = await student(req, res);
     if (!s) return;
     const room = await roomById(req.params.id);
     if (!room || room.phase !== "writing" || room.current_round < 0)
       return fail(res, 409, "This writing round is closed");
+    if (!matchesStep(req, res, room)) return;
     const text = String(bodyOf(req).response ?? "").trim();
     if (text.length < 3 || text.length > 5000)
       return fail(res, 400, "Write your paraphrase before submitting");
@@ -498,9 +536,34 @@ app.post("/api/rooms/:id/responses", async (req, res, next) => {
   } catch (e) {
     next(e);
   }
-});
+}));
 
-app.post("/api/rooms/:id/summary", async (req, res, next) => {
+// Removing a submission also removes its old grade through the foreign key.
+// The response text is returned so the student can restore it as a local draft.
+app.post("/api/rooms/:id/responses/unsubmit", roomWrite(async (req, res, next) => {
+  try {
+    const s = await student(req, res);
+    if (!s) return;
+    const room = await roomById(req.params.id);
+    if (!room || room.phase !== "writing") return fail(res, 409, "Writing has ended. Ask your teacher to reopen it.");
+    if (!matchesStep(req, res, room)) return;
+    const response = await one("DELETE FROM parafly_responses WHERE room_id=$1 AND student_id=$2 AND round_index=$3 RETURNING response_text", [room.id, s.id, room.current_round]);
+    res.json({ ok: true, text: response?.response_text ?? null });
+  } catch (error) { next(error); }
+}));
+app.post("/api/rooms/:id/summary/unsubmit", roomWrite(async (req, res, next) => {
+  try {
+    const s = await student(req, res);
+    if (!s) return;
+    const room = await roomById(req.params.id);
+    if (!room || room.phase !== "summary") return fail(res, 409, "The final summary has closed.");
+    if (!matchesStep(req, res, room)) return;
+    const summary = await one("DELETE FROM parafly_summaries WHERE room_id=$1 AND student_id=$2 RETURNING summary_text", [room.id, s.id]);
+    res.json({ ok: true, text: summary?.summary_text ?? null });
+  } catch (error) { next(error); }
+}));
+
+app.post("/api/rooms/:id/summary", roomWrite(async (req, res, next) => {
   try {
     const s = await student(req, res);
     if (!s) return;
@@ -508,6 +571,7 @@ app.post("/api/rooms/:id/summary", async (req, res, next) => {
       body = bodyOf(req);
     if (!room || room.phase !== "summary")
       return fail(res, 409, "The final summary is not open");
+    if (!matchesStep(req, res, room)) return;
     const text = String(body.summary ?? "").trim();
     if (body.includesThreeFacts !== true)
       return fail(
@@ -574,7 +638,7 @@ app.post("/api/rooms/:id/summary", async (req, res, next) => {
   } catch (e) {
     next(e);
   }
-});
+}));
 
 app.get("/api/rooms/:id/teacher", async (req, res, next) => {
   try {
@@ -672,7 +736,7 @@ app.get("/api/rooms/:id/teacher", async (req, res, next) => {
   }
 });
 
-app.put("/api/rooms/:id/scores/:responseId", async (req, res, next) => {
+app.put("/api/rooms/:id/scores/:responseId", roomWrite(async (req, res, next) => {
   try {
     const room = await teacher(req, res);
     if (!room) return;
@@ -700,9 +764,9 @@ app.put("/api/rooms/:id/scores/:responseId", async (req, res, next) => {
   } catch (e) {
     next(e);
   }
-});
+}));
 
-app.put("/api/rooms/:id/summary-scores/:summaryId", async (req, res, next) => {
+app.put("/api/rooms/:id/summary-scores/:summaryId", roomWrite(async (req, res, next) => {
   try {
     const room = await teacher(req, res);
     if (!room) return;
@@ -726,9 +790,9 @@ app.put("/api/rooms/:id/summary-scores/:summaryId", async (req, res, next) => {
   } catch (e) {
     next(e);
   }
-});
+}));
 
-app.post("/api/rooms/:id/summary-scores/release", async (req, res, next) => {
+app.post("/api/rooms/:id/summary-scores/release", roomWrite(async (req, res, next) => {
   try {
     const room = await teacher(req, res);
     if (!room) return;
@@ -741,9 +805,9 @@ app.post("/api/rooms/:id/summary-scores/release", async (req, res, next) => {
   } catch (e) {
     next(e);
   }
-});
+}));
 
-app.patch("/api/rooms/:id/settings", async (req, res, next) => {
+app.patch("/api/rooms/:id/settings", roomWrite(async (req, res, next) => {
   try {
     const room = await teacher(req, res);
     if (!room) return;
@@ -760,12 +824,13 @@ app.patch("/api/rooms/:id/settings", async (req, res, next) => {
   } catch (e) {
     next(e);
   }
-});
+}));
 
-app.post("/api/rooms/:id/timer", async (req, res, next) => {
+app.post("/api/rooms/:id/timer", roomWrite(async (req, res, next) => {
   try {
     const room = await teacher(req, res);
     if (!room) return;
+    if (!matchesStep(req, res, room)) return;
     if (!["writing", "voting"].includes(room.phase))
       return fail(res, 409, "The timer is available only during writing and voting");
     const body = bodyOf(req),
@@ -792,10 +857,13 @@ app.post("/api/rooms/:id/timer", async (req, res, next) => {
       running = true;
     } else if (action === "add") {
       const seconds = Math.min(600, Math.max(1, Number(body.seconds) || 30));
-      const base = running && endsAt ? Math.max(Date.now(), new Date(endsAt).getTime()) : Date.now();
-      endsAt = new Date(base + seconds * 1000);
-      remaining = Math.max(0, Math.ceil((endsAt.getTime() - Date.now()) / 1000));
-      running = true;
+      if (running && endsAt) {
+        endsAt = new Date(Math.max(Date.now(), new Date(endsAt).getTime()) + seconds * 1000);
+        remaining = Math.ceil((endsAt.getTime() - Date.now()) / 1000);
+      } else {
+        remaining += seconds;
+        endsAt = null;
+      }
     } else if (action === "clear") {
       remaining = 0;
       endsAt = null;
@@ -810,9 +878,9 @@ app.post("/api/rooms/:id/timer", async (req, res, next) => {
   } catch (e) {
     next(e);
   }
-});
+}));
 
-app.post("/api/rooms/:id/scores/release", async (req, res, next) => {
+app.post("/api/rooms/:id/scores/release", roomWrite(async (req, res, next) => {
   try {
     const room = await teacher(req, res);
     if (!room) return;
@@ -836,12 +904,13 @@ app.post("/api/rooms/:id/scores/release", async (req, res, next) => {
   } catch (e) {
     next(e);
   }
-});
+}));
 
-app.patch("/api/rooms/:id/control", async (req, res, next) => {
+app.patch("/api/rooms/:id/control", roomWrite(async (req, res, next) => {
   try {
     const room = await teacher(req, res);
     if (!room) return;
+    if (!matchesStep(req, res, room)) return;
     const body = bodyOf(req),
       action = body.action;
     let phase = room.phase,
@@ -890,8 +959,6 @@ app.patch("/api/rooms/:id/control", async (req, res, next) => {
     } else if (action === "skip") {
       if (phase !== "review")
         return fail(res, 409, "Feedback can only be skipped during review");
-      if (!Array.isArray(room.scores_released_rounds) || !room.scores_released_rounds.includes(round))
-        return fail(res, 409, `Release the Passage ${round + 1} scores before moving on`);
       if (round + 1 >= room.paragraphs.length) {
         phase = "summary";
         endsAt = null;
@@ -1003,8 +1070,6 @@ app.patch("/api/rooms/:id/control", async (req, res, next) => {
     } else if (action === "next") {
       if (phase !== "sharing")
         return fail(res, 409, "Complete sharing before continuing");
-      if (!Array.isArray(room.scores_released_rounds) || !room.scores_released_rounds.includes(round))
-        return fail(res, 409, `Release the Passage ${round + 1} scores before moving on`);
       if (round + 1 >= room.paragraphs.length) {
         phase = "summary";
         endsAt = null;
@@ -1026,8 +1091,6 @@ app.patch("/api/rooms/:id/control", async (req, res, next) => {
     } else if (action === "finish") {
       if (phase !== "summary")
         return fail(res, 409, "The final summary is not open");
-      if (!room.summary_scores_released)
-        return fail(res, 409, "Release the final summary scores before finishing ParaFLY");
       phase = "complete";
       endsAt = null;
       timerEndsAt = null;
@@ -1065,9 +1128,9 @@ app.patch("/api/rooms/:id/control", async (req, res, next) => {
   } catch (e) {
     next(e);
   }
-});
+}));
 
-app.post("/api/rooms/:id/vote", async (req, res, next) => {
+app.post("/api/rooms/:id/vote", roomWrite(async (req, res, next) => {
   try {
     const s = await student(req, res);
     if (!s) return;
@@ -1105,7 +1168,7 @@ app.post("/api/rooms/:id/vote", async (req, res, next) => {
   } catch (e) {
     next(e);
   }
-});
+}));
 
 app.get("/api/rooms/:id/export", async (req, res, next) => {
   try {

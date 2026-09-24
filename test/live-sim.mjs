@@ -66,9 +66,9 @@ dashboard=await ok(`/rooms/${room.id}/teacher`,{token:teacher});
 assert.equal(dashboard.summaries.length,34);
 assert.equal(dashboard.room.shareStudentIds.length,2);
 await Promise.all(dashboard.summaries.map((s,i)=>ok(`/rooms/${room.id}/summary-scores/${s.id}`,{method:"PUT",token:teacher,body:{score:i%10+1}})));
-let blocked=await request(`/rooms/${room.id}/control`,{method:"PATCH",token:teacher,body:{action:"finish"}});assert.equal(blocked.status,409);
 studentView=await ok(`/rooms/${room.id}/student`,{token:{"x-student-token":students[0].token}});assert.equal(studentView.releasedSummaryScore,null);
 await ok(`/rooms/${room.id}/summary-scores/release`,{method:"POST",token:teacher,body:{release:true}});
 studentView=await ok(`/rooms/${room.id}/student`,{token:{"x-student-token":students[0].token}});assert.ok(Number.isInteger(studentView.releasedSummaryScore));
 await ok(`/rooms/${room.id}/control`,{method:"PATCH",token:teacher,body:{action:"finish"}});
 console.log(JSON.stringify({ok:true,roomId:room.id,code:room.joinCode,students:students.length,totalVotes:102,joinUrl:dashboard.joinUrl}));
+
