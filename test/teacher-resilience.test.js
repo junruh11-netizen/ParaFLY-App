@@ -74,3 +74,13 @@ test('custom timer input survives arriving responses and failed polls preserve t
  input.blur();h.fail(true);await h.poll();assert.ok(el(h,'[data-action="end"]'));assert.equal(el(h,'#teacherConnectionNotice').hidden,false);
  h.fail(false);await h.poll();assert.equal(el(h,'#customMinutes').value,'7');assert.equal(el(h,'#teacherConnectionNotice').hidden,true);h.close();
 });
+test('summary peer average updates live while teacher grades remain separate',async()=>{
+ const h=await setup();h.state.room.phase='summary_review';h.state.peerQuality={average:null,received:0,expected:5,summaries:[]};
+ h.state.summaries=[{id:1,student_id:1,display_name:'Student',summary_text:'Three important facts in one summary.'}];
+ h.state.summaryScores=[{summary_id:1,score:9}];await h.poll();
+ assert.ok(el(h,'[data-action="finish"]'));assert.match(el(h,'.peer-dashboard').textContent,/0 of 5/);
+ h.state.peerQuality={average:3.5,received:2,expected:5,summaries:[{summaryId:1,average:3.5,received:2,expected:5}]};await h.poll();
+ assert.match(el(h,'.peer-dashboard').textContent,/3.50/);assert.match(el(h,'.peer-dashboard').textContent,/2 of 5/);
+ assert.equal(el(h,'[data-summary-score="1"]').value,'9');
+ assert.match(el(h,'.peer-summary-stat').textContent,/3.50\/4/);h.close();
+});

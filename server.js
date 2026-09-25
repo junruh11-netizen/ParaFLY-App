@@ -4,6 +4,8 @@ import express from "express";
 import pg from "pg";
 import QRCode from "qrcode";
 import {
+  assignSummaryReviews,
+  qualityStats,
   cleanCode,
   cleanNickname,
   csvCell,
@@ -106,6 +108,13 @@ CREATE TABLE IF NOT EXISTS parafly_summary_scores (
  room_id INTEGER NOT NULL REFERENCES parafly_rooms(id) ON DELETE CASCADE,
  summary_id INTEGER PRIMARY KEY REFERENCES parafly_summaries(id) ON DELETE CASCADE,
  score INTEGER NOT NULL CHECK(score BETWEEN 1 AND 10), scored_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE TABLE IF NOT EXISTS parafly_summary_reviews (
+ room_id INTEGER NOT NULL REFERENCES parafly_rooms(id) ON DELETE CASCADE,
+ reviewer_id INTEGER NOT NULL REFERENCES parafly_students(id) ON DELETE CASCADE,
+ summary_id INTEGER NOT NULL REFERENCES parafly_summaries(id) ON DELETE CASCADE,
+ position INTEGER NOT NULL, score INTEGER CHECK(score BETWEEN 1 AND 4),
+ PRIMARY KEY(room_id,reviewer_id,summary_id)
 );
 CREATE TABLE IF NOT EXISTS parafly_ai_usage (
  student_id INTEGER PRIMARY KEY REFERENCES parafly_students(id) ON DELETE CASCADE,
@@ -490,7 +499,11 @@ app.get("/api/rooms/:id/student", async (req, res, next) => {
         nickname: s.real_name || s.nickname || `Student ${s.id}`,
       },
       paragraph: showParagraph ? currentParagraph(room) : null,
-      mine,
+      mine: ["summary", "summary_review"].includes(room.phase) ? [] : mine,
+      peerReviews: room.phase === "summary_review" ? (await db.query(
+        "SELECT r.summary_id,r.score,x.summary_text FROM parafly_summary_reviews r JOIN parafly_summaries x ON x.id=r.summary_id WHERE r.room_id=$1 AND r.reviewer_id=$2 ORDER BY r.position", [room.id,s.id])).rows : [],
+      peerFeedback: room.phase === "complete" && summary ? qualityStats((await db.query(
+        "SELECT summary_id,score FROM parafly_summary_reviews WHERE room_id=$1 AND summary_id=$2", [room.id,summary.id])).rows).summaries[0] ?? null : null,
       summary: summary ?? null,
       exemplars,
       results,
@@ -723,6 +736,7 @@ app.get("/api/rooms/:id/teacher", async (req, res, next) => {
       voteCriteria: voteCriteriaRows,
       scores,
       summaryScores,
+      peerQuality: qualityStats((await db.query("SELECT summary_id,score FROM parafly_summary_reviews WHERE room_id=$1", [room.id])).rows),
       voteProgress: {
         ...(voteProgress ?? { started: 0, submitted: 0, completed: 0 }),
         expected,
@@ -770,7 +784,7 @@ app.put("/api/rooms/:id/summary-scores/:summaryId", roomWrite(async (req, res, n
   try {
     const room = await teacher(req, res);
     if (!room) return;
-    if (room.phase !== "summary")
+    if (!["summary", "summary_review", "complete"].includes(room.phase))
       return fail(res, 409, "Summaries can only be scored during the final summary stage");
     const summaryId = Number(req.params.summaryId),
       score = Number(bodyOf(req).score);
@@ -1088,8 +1102,15 @@ app.patch("/api/rooms/:id/control", roomWrite(async (req, res, next) => {
         timerEndsAt = null;
         timerRunning = false;
       }
+    } else if (action === "reviewSummaries") {
+      if (phase !== "summary") return fail(res,409,"Summary writing is not open");
+      const summaries = (await db.query("SELECT id,student_id FROM parafly_summaries WHERE room_id=$1 ORDER BY id", [room.id])).rows;
+      for (const a of assignSummaryReviews(summaries)) {
+        await db.query("INSERT INTO parafly_summary_reviews(room_id,reviewer_id,summary_id,position) VALUES($1,$2,$3,$4)", [room.id,a.reviewerId,a.summaryId,a.position]);
+      }
+      phase = "summary_review";
     } else if (action === "finish") {
-      if (phase !== "summary")
+      if (!["summary", "summary_review"].includes(phase))
         return fail(res, 409, "The final summary is not open");
       phase = "complete";
       endsAt = null;
@@ -1128,6 +1149,18 @@ app.patch("/api/rooms/:id/control", roomWrite(async (req, res, next) => {
   } catch (e) {
     next(e);
   }
+}));
+
+app.post("/api/rooms/:id/summary-review", roomWrite(async (req,res) => {
+  const s = await student(req,res); if (!s) return;
+  const room = await roomById(req.params.id);
+  if (room.phase !== "summary_review") return fail(res,409,"Peer ratings are closed");
+  if (!matchesStep(req,res,room)) return;
+  const {summaryId,score} = bodyOf(req);
+  if (!Number.isInteger(score) || score < 1 || score > 4) return fail(res,400,"Choose a rating from 1 to 4");
+  const saved = await one("UPDATE parafly_summary_reviews SET score=$1 WHERE room_id=$2 AND reviewer_id=$3 AND summary_id=$4 RETURNING summary_id", [score,room.id,s.id,Number(summaryId)]);
+  if (!saved) return fail(res,403,"This summary is not assigned to you");
+  res.json({ok:true});
 }));
 
 app.post("/api/rooms/:id/vote", roomWrite(async (req, res, next) => {
@@ -1182,17 +1215,18 @@ app.get("/api/rooms/:id/export", async (req, res, next) => {
     ).rows;
     const summaries = (
       await db.query(
-        "SELECT s.nickname,x.summary_text,sc.score FROM parafly_summaries x JOIN parafly_students s ON s.id=x.student_id LEFT JOIN parafly_summary_scores sc ON sc.summary_id=x.id WHERE x.room_id=$1 ORDER BY s.nickname",
+        "SELECT x.id,s.nickname,x.summary_text,sc.score FROM parafly_summaries x JOIN parafly_students s ON s.id=x.student_id LEFT JOIN parafly_summary_scores sc ON sc.summary_id=x.id WHERE x.room_id=$1 ORDER BY s.nickname",
         [room.id],
       )
     ).rows;
+    const peer = qualityStats((await db.query("SELECT summary_id,score FROM parafly_summary_reviews WHERE room_id=$1", [room.id])).rows);
     const csv = [
-      "Student name,Task,Answer,Grade (out of 10),Grading status",
+      "Student name,Task,Answer,Grade (out of 10),Grading status,Peer average (out of 4),Peer reviews received",
       ...rows.map((r) =>
-        [r.nickname, `Passage ${r.round_index + 1}`, r.response_text, r.score, r.score == null ? "Ungraded" : "Graded"].map(csvCell).join(","),
+        [r.nickname, `Passage ${r.round_index + 1}`, r.response_text, r.score, r.score == null ? "Ungraded" : "Graded", "", ""].map(csvCell).join(","),
       ),
       ...summaries.map((x) =>
-        [x.nickname, "Final Summary", x.summary_text, x.score, x.score == null ? "Ungraded" : "Graded"].map(csvCell).join(","),
+        [x.nickname, "Final Summary", x.summary_text, x.score, x.score == null ? "Ungraded" : "Graded", peer.summaries.find(p=>p.summaryId===x.id)?.average?.toFixed(2) ?? "", peer.summaries.find(p=>p.summaryId===x.id)?.received ?? 0].map(csvCell).join(","),
       ),
     ].join("\r\n");
     res.type("text/csv; charset=utf-8").attachment("parafly-answers-and-grades.csv").send("\uFEFF" + csv);

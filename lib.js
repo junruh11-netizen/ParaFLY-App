@@ -6,6 +6,7 @@ export const phases = [
   "results",
   "sharing",
   "summary",
+  "summary_review",
   "complete",
 ];
 
@@ -141,4 +142,32 @@ export function csvCell(value) {
   const text = String(value ?? "");
   const safe = /^\s*[=+\-@]/.test(text) ? `'${text}` : text;
   return `"${safe.replaceAll('"', '""')}"`;
+}
+
+
+// Cyclic assignments give every author the same number of distinct peers.
+export function assignSummaryReviews(summaries, random = Math.random) {
+  const shuffled = [...summaries];
+  for (let i = shuffled.length - 1; i > 0; i--) {
+    const j = Math.floor(random() * (i + 1));
+    [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+  }
+  return shuffled.flatMap((reviewer, i) =>
+    Array.from({ length: Math.min(5, Math.max(0, shuffled.length - 1)) }, (_, j) => ({
+      reviewerId: reviewer.student_id,
+      summaryId: shuffled[(i + j + 1) % shuffled.length].id,
+      position: j,
+    })));
+}
+export function qualityStats(rows) {
+  const rated = rows.filter(x => x.score != null);
+  const groups = new Map();
+  for (const row of rows) {
+    if (!groups.has(row.summary_id)) groups.set(row.summary_id, { summaryId: row.summary_id, expected: 0, received: 0, total: 0, counts: [0,0,0,0] });
+    const g = groups.get(row.summary_id); g.expected++;
+    if (row.score != null) { g.received++; g.total += Number(row.score); g.counts[Number(row.score)-1]++; }
+  }
+  const summaries = [...groups.values()].map(({total,...g}) => ({...g, average: g.received ? total/g.received : null}));
+  const scored = summaries.filter(x => x.average != null);
+  return { expected: rows.length, received: rated.length, average: scored.length ? scored.reduce((n,x)=>n+x.average,0)/scored.length : null, summaries };
 }
