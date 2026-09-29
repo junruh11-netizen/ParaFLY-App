@@ -1502,6 +1502,7 @@ select:focus {
   align-items: center;
 }
 .nickname-toggle {
+  position: relative;
   display: inline-flex;
   align-items: center;
   gap: 9px;
@@ -1515,6 +1516,12 @@ select:focus {
 }
 .nickname-toggle input {
   position: absolute;
+  width: 1px;
+  height: 1px;
+  left: 12px;
+  top: 50%;
+  margin: 0;
+  padding: 0;
   opacity: 0;
   pointer-events: none;
 }
