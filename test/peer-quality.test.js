@@ -52,7 +52,7 @@ test('student ratings survive polls, failed writes and reload; feedback appears 
  assert.equal(doc.querySelectorAll('.quality-option').length,4);
  const radio=doc.querySelector('[value="3"]');radio.click();await h.poll();assert.equal(doc.querySelector('[value="3"]'),radio);assert.ok(radio.checked);
  h.fail(true);doc.querySelector('#peerRatingForm').dispatchEvent(new h.w.Event('submit',{cancelable:true}));await flush();assert.match(doc.querySelector('#peerError').textContent,/try again/);assert.ok(radio.checked);
- h.fail(false);doc.querySelector('#peerRatingForm').dispatchEvent(new h.w.Event('submit',{cancelable:true}));await flush();assert.equal(state.peerReviews[0].score,3);assert.match(doc.body.textContent,/SUMMARY 2 OF 2/);
- h.close();h=await studentUI(state);assert.match(h.w.document.body.textContent,/SUMMARY 2 OF 2/);assert.doesNotMatch(h.w.document.body.textContent,/Your emoji feedback/);
+ h.fail(false);doc.querySelector('#peerRatingForm').dispatchEvent(new h.w.Event('submit',{cancelable:true}));await flush();assert.equal(state.peerReviews[0].score,3);assert.match(doc.body.textContent,/RESPONSE 2 OF 2/);
+ h.close();h=await studentUI(state);assert.match(h.w.document.body.textContent,/RESPONSE 2 OF 2/);assert.doesNotMatch(h.w.document.body.textContent,/Your emoji feedback/);
  state.room.phase='complete';state.peerFeedback={received:1,expected:2,counts:[0,0,1,0]};await h.poll();assert.match(h.w.document.body.textContent,/Your emoji feedback/);assert.match(h.w.document.body.textContent,/1 of 2 reviews received/);h.close();
 });

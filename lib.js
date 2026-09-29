@@ -117,6 +117,11 @@ export function publicRoom(room) {
     endsAt: room.ends_at,
     feedbackMode: room.feedback_mode || "class_vote",
     aiFactCheck: Boolean(room.ai_fact_check),
+    paragraphType: room.paragraph_type || "summary",
+    perspective: room.perspective || "none",
+    dbqEnabled: Boolean(room.dbq_enabled),
+    dbqQuestion: room.dbq_enabled ? room.dbq_question || "" : "",
+    finalPrompt: room.final_prompt || "",
     identityMode: room.identity_mode || "names",
     hideIdentities: room.hide_identities === true,
     timerEndsAt: room.timer_ends_at,
@@ -170,4 +175,19 @@ export function qualityStats(rows) {
   const summaries = [...groups.values()].map(({total,...g}) => ({...g, average: g.received ? total/g.received : null}));
   const scored = summaries.filter(x => x.average != null);
   return { expected: rows.length, received: rated.length, average: scored.length ? scored.reduce((n,x)=>n+x.average,0)/scored.length : null, summaries };
+}
+
+export const paragraphTypes = ["summary", "explanatory", "compare", "cause", "argument", "literature", "narrative"];
+export const perspectives = ["none", "first", "second", "third"];
+export function finalTaskSettings(body) {
+  const paragraphType = body.paragraphType ?? "summary";
+  const perspective = body.perspective ?? "none";
+  if (!paragraphTypes.includes(paragraphType) || !perspectives.includes(perspective)) throw new Error("Choose a valid paragraph type and perspective");
+  if (body.dbqEnabled != null && typeof body.dbqEnabled !== "boolean") throw new Error("DBQ must be on or off");
+  const dbqEnabled = body.dbqEnabled === true;
+  const dbqQuestion = String(body.dbqQuestion ?? "").trim();
+  const finalPrompt = String(body.finalPrompt ?? "").trim();
+  if (dbqEnabled && !dbqQuestion) throw new Error("Enter a DBQ question before creating the session");
+  if (dbqQuestion.length > 1000 || finalPrompt.length > 1000) throw new Error("Keep each question or prompt to 1,000 characters or fewer");
+  return {paragraphType,perspective,dbqEnabled,dbqQuestion:dbqEnabled ? dbqQuestion : "",finalPrompt};
 }

@@ -109,13 +109,26 @@ async function create() {
     aiFactCheckAvailable: false,
   }));
   setPage(
-    `<div class="setup-heading"><a class="back-link" href="/">← Home</a><h1>New session</h1><p class="muted">Paste a short passage. Add another only when your class is ready for another rep.</p></div><form id="form"><div class="card"><div class="field"><label for="activityTitle">Session title</label><input id="activityTitle" name="title" required maxlength="120" placeholder="e.g. The Declaration in Our Own Words"></div><div class="preset-row"><button type="button" class="preset active" data-preset="first">First Rep <small>1 passage</small></button><button type="button" class="preset" data-preset="standard">Standard ParaFLY <small>3 passages</small></button></div></div><div class="card"><div class="row heading-row"><div><h2>Passages</h2><p class="muted">Students see one passage at a time.</p></div><button type="button" class="btn secondary" id="addPassage">+ Add passage</button></div><div id="passages"></div></div><details class="card advanced"><summary>More options <span>Directions, word limit${config.aiFactCheckAvailable ? ", AI" : ""}</span></summary><div class="field"><label for="directions">Directions for students</label><textarea id="directions" name="directions" maxlength="500" placeholder="Keep the meaning, but change the wording and sentence structure."></textarea></div><input id="seconds" name="seconds" type="hidden" value="60"><div class="field"><label for="words">Maximum words</label><input id="words" name="words" type="number" min="5" max="500" placeholder="No limit"></div>${config.aiFactCheckAvailable ? '<label class="confirm"><input name="aiFactCheck" type="checkbox"> Use optional AI Fact Check for the final summary</label>' : ""}</details><div class="setup-summary"><b>Students will complete:</b> <span id="setupSummary">1 passage · class review and vote · final summary with 3+ facts</span></div><div class="row create-actions"><button type="button" class="btn secondary" id="previewStudent">Preview student view</button><button class="btn orange large">Create session</button></div><p id="err"></p></form><dialog id="previewDialog" class="app-dialog"><button class="dialog-close" id="closePreview" aria-label="Close">×</button><span class="pill">STUDENT PREVIEW</span><h2>Read & say it your way</h2><div class="preview-content" id="previewContent"></div><p class="muted">Preview only — nothing here is saved.</p></dialog>`,
+    `<div class="setup-heading"><a class="back-link" href="/">← Home</a><h1>New session</h1><p class="muted">Paste a short passage. Add another only when your class is ready for another rep.</p></div><form id="form"><div class="card"><div class="field"><label for="activityTitle">Session title</label><input id="activityTitle" name="title" required maxlength="120" placeholder="e.g. The Declaration in Our Own Words"></div><div class="preset-row"><button type="button" class="preset active" data-preset="first">First Rep <small>1 passage</small></button><button type="button" class="preset" data-preset="standard">Standard ParaFLY <small>3 passages</small></button></div></div><div class="card"><div class="row heading-row"><div><h2>Passages</h2><p class="muted">Students see one passage at a time.</p></div><button type="button" class="btn secondary" id="addPassage">+ Add passage</button></div><div id="passages"></div></div><section class="card final-task-setup"><h2>Final paragraph</h2><div class="final-task-fields"><div class="field"><label for="paragraphType">Paragraph type</label><select id="paragraphType" name="paragraphType">${paragraphOptions.map(([value,label])=>`<option value="${value}">${esc(label)}</option>`).join("")}</select></div><div class="field"><label for="perspective">Perspective</label><select id="perspective" name="perspective">${perspectiveOptions.map(([value,label])=>`<option value="${value}">${label}</option>`).join("")}</select></div></div><div class="field" id="finalPromptField"><label for="finalPrompt">Final paragraph prompt (optional)</label><textarea id="finalPrompt" name="finalPrompt" maxlength="1000"></textarea></div><label class="nickname-toggle"><input id="dbqEnabled" name="dbqEnabled" type="checkbox"><span class="toggle-track"></span><b>DBQ</b></label><div class="field" id="dbqQuestionField" hidden><label for="dbqQuestion">DBQ question (required)</label><textarea id="dbqQuestion" name="dbqQuestion" maxlength="1000" disabled></textarea></div></section><details class="card advanced"><summary>More options <span>Directions, word limit${config.aiFactCheckAvailable ? ", AI" : ""}</span></summary><div class="field"><label for="directions">Directions for students</label><textarea id="directions" name="directions" maxlength="500" placeholder="Keep the meaning, but change the wording and sentence structure."></textarea></div><input id="seconds" name="seconds" type="hidden" value="60"><div class="field"><label for="words">Maximum words</label><input id="words" name="words" type="number" min="5" max="500" placeholder="No limit"></div>${config.aiFactCheckAvailable ? '<label class="confirm"><input name="aiFactCheck" type="checkbox"> Use optional AI Fact Check for the final summary</label>' : ""}</details><div class="setup-summary"><b>Students will complete:</b> <span id="setupSummary">1 passage · class review and vote · final summary with 3+ facts</span></div><div class="row create-actions"><button type="button" class="btn secondary" id="previewStudent">Preview student view</button><button class="btn orange large">Create session</button></div><p id="err"></p></form><dialog id="previewDialog" class="app-dialog"><button class="dialog-close" id="closePreview" aria-label="Close">×</button><span class="pill">STUDENT PREVIEW</span><h2>Read & say it your way</h2><div class="preview-content" id="previewContent"></div><p class="muted">Preview only — nothing here is saved.</p></dialog>`,
   );
   const formEl = byId("form"),
     errEl = byId("err"),
     passagesEl = byId("passages"),
     summaryEl = byId("setupSummary");
   let passageCount = 1;
+  const setupTask = () => ({paragraphType:byId("paragraphType").value,perspective:byId("perspective").value,dbqEnabled:byId("dbqEnabled").checked,dbqQuestion:byId("dbqQuestion").value,finalPrompt:byId("finalPrompt").value});
+  const updateTask = () => {
+    const enabled = byId("dbqEnabled").checked;
+    byId("dbqQuestionField").hidden = !enabled;
+    byId("dbqQuestion").disabled = !enabled;
+    byId("dbqQuestion").required = enabled;
+    byId("paragraphType").disabled = enabled;
+    byId("finalPromptField").hidden = enabled;
+    byId("finalPrompt").disabled = enabled;
+    summaryEl.textContent = `${passageCount} passage${passageCount===1 ? "" : "s"} · class review and vote after each · ${taskLabel(setupTask())}`;
+  };
+  for (const id of ["dbqEnabled","paragraphType","perspective"]) byId(id).onchange=updateTask;
+  updateTask();
   const renderPassages = (seed) => {
     const old =
       seed || [...passagesEl.querySelectorAll("textarea")].map((x) => x.value);
@@ -125,7 +138,7 @@ async function create() {
         `<div class="passage-entry"><div class="row heading-row"><label for="passage${i + 1}">Passage ${i + 1}</label>${i ? `<button type="button" class="text-button remove-passage" data-index="${i}">Remove</button>` : ""}</div><textarea id="passage${i + 1}" name="passage" ${i ? "" : "required"} maxlength="5000" placeholder="Paste passage ${i + 1} here...">${esc(old[i] || "")}</textarea></div>`,
     ).join("");
     byId("addPassage").disabled = passageCount >= 3;
-    summaryEl.textContent = `${passageCount} passage${passageCount === 1 ? "" : "s"} · class review and vote after each · final summary with 3+ facts`;
+    updateTask();
     document.querySelectorAll(".remove-passage").forEach(
       (b) =>
         (b.onclick = () => {
@@ -162,7 +175,7 @@ async function create() {
       formEl.querySelector('[name="passage"]')?.value.trim() ||
       "Your first passage will appear here.";
     byId("previewContent").innerHTML =
-      `<div class="passage">${esc(passage)}</div>${criteriaGuide()}<textarea placeholder="Keep the meaning. Change the wording and sentence structure."></textarea><button class="btn orange" type="button">Submit response</button>`;
+      ` ${dbqBanner(setupTask())}<div class="passage">${esc(passage)}</div>${criteriaGuide()}<textarea placeholder="Keep the meaning. Change the wording and sentence structure."></textarea><button class="btn orange" type="button">Submit response</button>`;
     previewDialog.showModal();
   };
   byId("closePreview").onclick = () => previewDialog.close();
@@ -178,6 +191,7 @@ async function create() {
         const room = await api("/rooms", {
           method: "POST",
           body: JSON.stringify({
+            ...setupTask(),
             title: d.get("title"),
             directions: d.get("directions"),
             paragraphs,
@@ -1030,14 +1044,37 @@ async function teacherPageV2(id) {
 const timerMarkup = (r, voting = false, writing = false) =>
   `<section class="timer-console"><div><span class="section-label">${voting ? "VOTING TIMER" : writing ? "WRITING TIMER" : "TIMER"}</span><div class="timer" id="sharedClock">${r.timerRemaining ? `${Math.floor(r.timerRemaining / 60)}:${String(r.timerRemaining % 60).padStart(2, "0")}` : "—:—"}</div>${writing ? '<p class="muted">Choose a time now. Students will see the same countdown.</p>' : ""}</div><div class="timer-actions"><button class="timer-preset" data-seconds="30">30s</button><button class="timer-preset" data-seconds="60">1m</button><button class="timer-preset" data-seconds="120">2m</button><button class="timer-preset" data-seconds="180">3m</button><button class="timer-preset" data-seconds="300">5m</button><button class="timer-preset" data-seconds="600">10m</button><input id="customMinutes" type="number" min="1" max="60" placeholder="min" aria-label="Custom timer minutes"><button class="btn secondary compact" id="startCustom">Start</button>${writing ? '<button class="timer-preset add-time" id="addThirty">+30 seconds</button>' : ""}${r.timerRunning ? '<button class="btn secondary compact" data-timer="pause">Pause</button>' : r.timerRemaining ? '<button class="btn secondary compact" data-timer="resume">Resume</button>' : ""}<button class="text-button" data-timer="clear">Clear</button>${voting ? '<label class="auto-close"><input id="autoCloseVote" type="checkbox" checked> Close voting when time ends</label>' : ""}</div></section>`;
 
-const qualityLevels = [
-  ["🔧", "Needs work", "Important facts are mostly missing, or the meaning is hard to follow."],
-  ["🌱", "Getting there", "Some important information is included, but it needs more facts or clearer writing."],
-  ["🎯", "Meets the goal", "Includes at least three important facts and makes sense."],
-  ["⭐", "Strong summary", "Meets the goal and connects the facts in a clear, focused paragraph."],
+const paragraphOptions = [
+  ["summary", "Summary"], ["explanatory", "Informative/explanatory"],
+  ["compare", "Compare & contrast"], ["cause", "Cause & effect"],
+  ["argument", "Argument/opinion"], ["literature", "Response to literature"], ["narrative", "Narrative"],
 ];
-const summaryGuide = () => `<p>From memory, write one paragraph summarizing what you learned. Include at least three accurate, important facts in your own words.</p><details class="quality-guide" open><summary>What makes a strong summary?</summary>${qualityLevels.map(([emoji,label,description])=>`<p><b>${emoji} ${label}</b> — ${description}</p>`).join("")}</details>`;
-const feedbackMarkup = (feedback) => feedback ? `<section class="card"><h2>Your emoji feedback</h2><p>${feedback.received} of ${feedback.expected} reviews received. Peer feedback is separate from your teacher’s grade.</p>${qualityLevels.map(([emoji,label,description],i)=>`<div class="feedback-line"><span><b>${emoji} ${label}</b><small>${description}</small></span><strong>${feedback.counts[i]}</strong></div>`).join("")}</section>` : '';
+const perspectiveOptions = [["none","No preference"],["first","First person"],["second","Second person"],["third","Third person"]];
+const taskType = r => r.dbqEnabled ? "dbq" : r.paragraphType || "summary";
+const taskLabel = r => r.dbqEnabled ? "DBQ response" : paragraphOptions.find(x=>x[0]===taskType(r))?.[1] || "Summary";
+const perspectiveLabel = r => perspectiveOptions.find(x=>x[0]===r.perspective)?.[1] || "No preference";
+const taskBadge = r => `<p class="task-badge"><b>${esc(taskLabel(r))}</b>${r.perspective && r.perspective !== "none" ? ` · ${esc(perspectiveLabel(r))}` : ""}</p>`;
+const dbqBanner = r => r.dbqEnabled ? `<section class="card dbq-question"><span class="section-label">DBQ QUESTION</span><p>${esc(r.dbqQuestion)}</p></section>` : "";
+const taskDescriptions = {
+ summary: ["Important facts are mostly missing, inaccurate, or hard to follow.", "Some accurate information is included, but it needs three facts or clearer writing.", "Clearly summarizes the learning with at least three accurate facts.", "Connects at least three accurate facts in a clear, focused paragraph in the student's own words."],
+ explanatory: ["Does not explain the topic accurately or clearly.", "Explains part of the topic, but needs more facts or clearer explanation.", "Clearly explains the topic or process using at least three accurate supporting facts.", "Connects at least three accurate facts to explain how or why the topic or process works in a focused paragraph."],
+ compare: ["Does not meaningfully compare the subjects or includes major inaccuracies.", "Gives some similarities or differences, but needs clearer support.", "Explains similarities and differences using at least three accurate supporting facts.", "Connects the comparisons and explains why they matter, using at least three accurate supporting facts."],
+ cause: ["Does not identify accurate causes and effects.", "Identifies some causes or effects, but their connections or factual support need work.", "Explains causes and effects using at least three accurate supporting facts.", "Clearly explains how the causes led to the effects, connecting at least three accurate facts in a focused paragraph."],
+ argument: ["Does not state a clear position or provide relevant factual support.", "States a position, but needs stronger evidence or explanation.", "States a clear position and supports it with at least three accurate, relevant facts.", "Clearly explains how at least three accurate facts support the position in a focused, convincing paragraph."],
+ literature: ["Does not answer the prompt or misunderstands the text.", "Partly answers the prompt, but needs supporting details or explanation.", "Answers the prompt using at least three accurate details from the text.", "Clearly explains how at least three accurate details from the text support the response."],
+ narrative: ["Events are difficult to follow or do not address the prompt.", "A story is developing, but the sequence, details, or clarity need work.", "Tells a clear, logically ordered story that addresses the prompt.", "Uses well-chosen details and connected events to create a clear, focused narrative."],
+ dbq: ["Does not answer the question correctly or lacks relevant facts.", "Partly answers the question, but needs three accurate supporting facts or a clearer answer.", "Answers the question correctly with at least three accurate facts supporting the answer.", "Answers the question correctly and clearly explains how at least three accurate facts support the answer in a focused paragraph."],
+};
+const qualityLevels = (r = {}) => {
+ const descriptions = taskDescriptions[taskType(r)] || taskDescriptions.summary;
+ const person = r.perspective && r.perspective !== "none" ? perspectiveLabel(r).toLowerCase() : null;
+ return [["🔧","Needs work"],["🌱","Getting there"],["🎯","Meets the goal"],["⭐","Strong response"]].map(([emoji,label],i)=>[
+  emoji,label, descriptions[i] + (person ? [" The assigned perspective also needs attention if it is not used.",` Use ${person} more consistently if needed.`,` Uses ${person} consistently.`,` Maintains ${person} consistently throughout.`][i] : "")
+ ]);
+};
+const summaryGuide = (r = {}) => `${taskBadge(r)}<p>${r.dbqEnabled ? "From memory, answer the DBQ question in one paragraph. Include at least three accurate facts to support your answer." : taskType(r)==="summary" ? "From memory, write one paragraph summarizing what you learned. Include at least three accurate, important facts in your own words." : taskType(r)==="narrative" ? "Write one narrative paragraph based on what you read and the assigned prompt. The original passages will not be available." : "From memory, write one paragraph that meets the task below. Include at least three accurate supporting facts or details in your own words."}</p>${!r.dbqEnabled && r.finalPrompt ? `<div class="final-prompt"><b>Your task</b><p>${esc(r.finalPrompt)}</p></div>` : ""}<details class="quality-guide" open><summary>What makes a strong response?</summary>${qualityLevels(r).map(([emoji,label,description])=>`<p><b>${emoji} ${label}</b> — ${description}</p>`).join("")}</details>`;
+const feedbackMarkup = (feedback,r = {}) => feedback ? `<section class="card"><h2>Your emoji feedback</h2>${taskBadge(r)}<p>${feedback.received} of ${feedback.expected} reviews received. Peer feedback is separate from your teacher’s grade.</p>${qualityLevels(r).map(([emoji,label,description],i)=>`<div class="feedback-line"><span><b>${emoji} ${label}</b><small>${description}</small></span><strong>${feedback.counts[i]}</strong></div>`).join("")}</section>` : '';
+
 const peerDashboard = (quality, closed) => `<section class="card peer-dashboard"><span class="section-label">PEER FEEDBACK · CLASS QUALITY AVERAGE</span><h2>${quality.average == null ? '—' : quality.average.toFixed(2)} <small>/ 4</small></h2><p>${closed ? 'Ratings closed' : 'Ratings in progress'} · ${quality.received} of ${quality.expected} ratings received</p><progress max="${Math.max(1,quality.expected)}" value="${quality.received}"></progress><p class="muted">Missing ratings are not zeros. Each rated summary contributes equally to the class average. Teacher grades are separate.</p></section>`;
 
 async function studentPageV3(id) {
@@ -1145,15 +1182,15 @@ async function studentPageV3(id) {
         body = `<div class="card winner-card"><span class="pill">CLASS WINNER</span><h2>Does this ParaFLY meet the criteria?</h2>${top ? `<div class="response selected"><b>${counts.get(top.id) || 0} votes</b><p>${esc(top.response_text)}</p></div>` : ""}${criteriaGuide()}${scoreNotice}${r.phase === "results" ? `<div class="tps"><b>Think · Pair · Share</b><div class="timer" id="clock">0:45</div><p>Explain how the winner does—or does not—meet the ParaFLY Check.</p></div>` : `<div class="share-callout"><h2>${sharer ? "You were selected to share!" : "Listen to the selected speakers."}</h2></div>`}</div>`;
       }
       if (r.phase === "summary")
-        body = `${timer}<div class="card"><span class="pill">FINAL OWNERSHIP TASK</span><h2>Bring it all together</h2>${summaryGuide()}${s.summary ? `<div class="response selected"><b>Final summary sent</b><p>${esc(s.summary.summary_text)}</p></div><button class="btn secondary" id="unsubmitSummary">Unsubmit &amp; edit</button>${s.releasedSummaryScore != null ? `<aside class="released-score"><span>SUMMARY SCORE</span><b>${s.releasedSummaryScore}/10</b><p>Only you can see this score.</p></aside>` : '<p class="score-waiting">Your summary score is hidden until your teacher releases it.</p>'}` : `<form id="summaryForm"><textarea id="summaryAnswer" required minlength="20" maxlength="5000" placeholder="Write a summary with at least three facts..."></textarea><label class="confirm"><input id="threeFacts" type="checkbox" required> My summary includes at least three accurate facts.</label><p id="err"></p><button class="btn orange">Submit final summary</button></form>`}</div>`;
+        body = `${timer}<div class="card"><span class="pill">FINAL OWNERSHIP TASK</span><h2>Bring it all together</h2>${summaryGuide(r)}${s.summary ? `<div class="response selected"><b>Final response sent</b><p>${esc(s.summary.summary_text)}</p></div><button class="btn secondary" id="unsubmitSummary">Unsubmit &amp; edit</button>${s.releasedSummaryScore != null ? `<aside class="released-score"><span>TEACHER SCORE</span><b>${s.releasedSummaryScore}/10</b><p>Only you can see this score.</p></aside>` : '<p class="score-waiting">Your teacher grade is hidden until your teacher releases it.</p>'}` : `<form id="summaryForm"><textarea id="summaryAnswer" required minlength="20" maxlength="5000" placeholder="Write your final paragraph..."></textarea><label class="confirm"><input id="threeFacts" type="checkbox" required> ${taskType(r)==="narrative" ? "My paragraph meets the narrative task and assigned perspective." : "My paragraph includes at least three accurate supporting facts or details."}</label><p id="err"></p><button class="btn orange">Submit final response</button></form>`}</div>`;
       if (r.phase === "summary_review") {
         const reviews = s.peerReviews || [], next = reviews.find(x => x.score == null);
         const done = reviews.filter(x => x.score != null).length;
-        body = next ? `<section class="card"><span class="pill">SUMMARY ${done + 1} OF ${reviews.length}</span><h2>How well does this summary meet the goal?</h2><p>Rate the writing using the descriptions below. Your review is anonymous.</p><div class="passage">${esc(next.summary_text)}</div><form id="peerRatingForm" data-summary-id="${next.summary_id}"><div class="quality-options">${qualityLevels.map(([emoji,label,description],i)=>`<label class="quality-option"><input type="radio" name="quality" value="${i+1}" required><span><b>${emoji} ${label}</b><small>${description}</small></span></label>`).join("")}</div><p id="peerError" role="status"></p><button class="btn orange">${done + 1 === reviews.length ? 'Finish my reviews' : 'Next summary'}</button></form></section>` : `<section class="card"><h2>${reviews.length ? 'Your reviews are complete' : 'Waiting for your teacher'}</h2><p>${reviews.length ? 'Your ratings are saved. Your emoji feedback will appear when your teacher finishes peer ratings.' : 'There are no peer summaries assigned to you. Your teacher can finish this step.'}</p></section>`;
+        body = next ? `<section class="card"><span class="pill">RESPONSE ${done + 1} OF ${reviews.length}</span><h2>How well does this response meet the goal?</h2>${taskBadge(r)}${!r.dbqEnabled && r.finalPrompt ? `<p><b>Task:</b> ${esc(r.finalPrompt)}</p>` : ""}<p>Rate the writing using the descriptions below. Your review is anonymous.</p><div class="passage">${esc(next.summary_text)}</div><form id="peerRatingForm" data-summary-id="${next.summary_id}"><div class="quality-options">${qualityLevels(r).map(([emoji,label,description],i)=>`<label class="quality-option"><input type="radio" name="quality" value="${i+1}" required><span><b>${emoji} ${label}</b><small>${description}</small></span></label>`).join("")}</div><p id="peerError" role="status"></p><button class="btn orange">${done + 1 === reviews.length ? 'Finish my reviews' : 'Next response'}</button></form></section>` : `<section class="card"><h2>${reviews.length ? 'Your reviews are complete' : 'Waiting for your teacher'}</h2><p>${reviews.length ? 'Your ratings are saved. Your emoji feedback will appear when your teacher finishes peer ratings.' : 'There are no peer summaries assigned to you. Your teacher can finish this step.'}</p></section>`;
       }
       if (r.phase === "complete")
-        body = `<div class="card"><h2>Flight complete</h2>${feedbackMarkup(s.peerFeedback)}${s.mine.map((x, i) => `<div class="response"><b>Passage ${i + 1}${released.has(i) ? ` · Score ${released.get(i)}/10` : ""}</b><p>${esc(x.response_text)}</p></div>`).join("")}${s.summary ? `<div class="response"><b>Final summary${s.releasedSummaryScore != null ? ` · Score ${s.releasedSummaryScore}/10` : ""}</b><p>${esc(s.summary.summary_text)}</p></div>` : ""}</div>`;
-      setPage(`<p id="connectionNotice" class="error" role="status" hidden></p><h1>${esc(r.title)}</h1>${roundBar(r)}${body}`);
+        body = `<div class="card"><h2>Flight complete</h2>${feedbackMarkup(s.peerFeedback,r)}${s.mine.map((x, i) => `<div class="response"><b>Passage ${i + 1}${released.has(i) ? ` · Score ${released.get(i)}/10` : ""}</b><p>${esc(x.response_text)}</p></div>`).join("")}${s.summary ? `<div class="response"><b>Final response${s.releasedSummaryScore != null ? ` · Score ${s.releasedSummaryScore}/10` : ""}</b><p>${esc(s.summary.summary_text)}</p></div>` : ""}</div>`;
+      setPage(`<p id="connectionNotice" class="error" role="status" hidden></p><h1>${esc(r.title)}</h1>${roundBar(r)}${dbqBanner(r)}${body}`);
       updateTimer(r);
       bindDraft("answer", r.currentRound);
       bindDraft("summaryAnswer", "summary");
@@ -1245,6 +1282,7 @@ async function studentPageV3(id) {
                 summary: byId("summaryAnswer").value,
                 phase: "summary",
                 includesThreeFacts: byId("threeFacts").checked,
+                confirmedRequirements: byId("threeFacts").checked,
               }),
             });
             renderKey = "";
@@ -1280,6 +1318,21 @@ async function teacherPageV3(id) {
     history.replaceState({}, "", `/teacher/${id}`);
   }
   if (!session || session.roomId !== id) return teacherPage(id);
+  const reference = document.createElement("div");
+  reference.id = "teacherPassageReference";
+  reference.hidden = true;
+  reference.innerHTML = `<button type="button" class="passage-fab" aria-label="Show original passage" aria-controls="originalPassagePanel" aria-expanded="false" title="Original passage"><svg viewBox="0 0 24 24" width="25" height="25" aria-hidden="true"><path d="M6 3h9l4 4v14H6zM14 3v5h5M9 12h7M9 16h7" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg></button><aside id="originalPassagePanel" class="original-passage-panel" aria-label="Original passage reference" hidden><div class="reference-header"><b id="referenceTitle">Original passage</b><button type="button" id="expandReference" aria-label="Maximize original passage">Maximize</button></div><div class="reference-text" tabindex="0"></div></aside>`;
+  document.body.append(reference);
+  const panel = reference.querySelector("aside"), fab = reference.querySelector(".passage-fab"), expand = reference.querySelector("#expandReference"), referenceText = reference.querySelector(".reference-text");
+  fab.onclick = () => { panel.hidden = !panel.hidden; fab.setAttribute("aria-expanded",String(!panel.hidden)); fab.setAttribute("aria-label",panel.hidden ? "Show original passage" : "Hide original passage"); };
+  expand.onclick = () => { const big = panel.classList.toggle("maximized"); expand.textContent = big ? "Minimize" : "Maximize"; expand.setAttribute("aria-label",big ? "Minimize original passage" : "Maximize original passage"); };
+  reference.onkeydown = event => { if(event.key === "Escape") { panel.hidden=true; fab.setAttribute("aria-expanded","false"); fab.setAttribute("aria-label","Show original passage"); fab.focus(); } };
+  const updateReference = r => {
+    reference.hidden = !["writing","review"].includes(r.phase);
+    const text = r.paragraphs[r.currentRound] || "";
+    if(referenceText.textContent !== text) { referenceText.textContent=text; referenceText.scrollTop=0; }
+    reference.querySelector("#referenceTitle").textContent = `Original passage ${r.currentRound+1}`;
+  };
   const pageVersion = renderVersion;
   let loading = false, reload = false, pendingWrites = 0, epoch = 0, pointerHeld = false;
   let lastSnapshot = "", mutationQueue = Promise.resolve(), currentStep = {};
@@ -1351,6 +1404,7 @@ async function teacherPageV3(id) {
         ? { score: document.activeElement.dataset.score, summary: document.activeElement.dataset.summaryScore } : null;
       const customMinutes = byId("customMinutes")?.value || "";
       const autoCloseVote = byId("autoCloseVote")?.checked;
+      updateReference(r);
       const controls =
         r.phase === "lobby"
           ? '<button class="btn orange" data-action="start">Begin passage 1</button>'
@@ -1363,7 +1417,7 @@ async function teacherPageV3(id) {
                 : r.phase === "results"
                   ? '<button class="btn orange" data-action="share">Select 2 students to share</button>'
                   : r.phase === "sharing"
-                    ? `<button class="btn orange" data-action="next">${r.currentRound + 1 >= r.paragraphCount ? "Open final summary" : "Launch next passage"}</button>`
+                    ? `<button class="btn orange" data-action="next">${r.currentRound + 1 >= r.paragraphCount ? "Open final paragraph" : "Launch next passage"}</button>`
                     : r.phase === "summary"
                       ? '<button class="btn orange" data-action="reviewSummaries">End writing &amp; start peer ratings</button>'
                       : r.phase === "summary_review"
@@ -1388,6 +1442,9 @@ async function teacherPageV3(id) {
       const selectedSharers = r.phase === "sharing"
         ? d.students.filter((x) => (r.shareStudentIds || []).includes(x.id))
         : [];
+      const winningResponse = roundResponses.find(x => x.id === r.modelResponseId);
+      const winnerPanel = ["results","sharing"].includes(r.phase) && winningResponse
+        ? `<section class="card winner-panel"><span class="section-label">WINNING PARAGRAPH · PASSAGE ${r.currentRound + 1}</span><h2>${esc(winningResponse.display_name)}</h2><p class="passage">${esc(winningResponse.response_text)}</p></section>` : "";
       const sharerPanel = r.phase === "sharing"
         ? `<section class="card selected-sharers"><span class="section-label">SELECTED TO SHARE</span><h2>${selectedSharers.length ? selectedSharers.map((x) => esc(x.display_name)).join(" and ") : "Selecting students…"}</h2><p>These two students share their thinking aloud before the class moves on.</p></section>`
         : "";
@@ -1395,7 +1452,7 @@ async function teacherPageV3(id) {
         ? `<section class="card release-reminder"><div><span class="section-label">OPTIONAL</span><h2>Release Passage ${r.currentRound + 1} scores</h2><p>You can keep grades private and continue, or release them to students.</p></div><button class="btn orange" id="releaseScores" ${scored.length ? "" : "disabled"}>Release scores</button></section>`
         : "";
       const summaryPanel = isSummaryPhase
-        ? `<section class="card response-board"><div class="row heading-row"><div><span class="section-label">FINAL SUMMARIES</span><h2>Final summaries &amp; teacher grades</h2><p class="muted">Teacher grades use the 1–10 scale and remain separate from peer feedback.</p></div><div class="score-release-actions"><span class="pill">${summaryReleased ? "SCORES RELEASED" : "SCORES HIDDEN"}</span><button class="btn secondary" id="releaseSummaryScores" ${scoredSummaries.length ? "" : "disabled"}>${summaryReleased ? "Unrelease scores" : "Release scores"}</button></div></div>${summaryGuide()}<div class="response-score-grid">${d.summaries.map((x, i) => `<article class="score-row"><div class="student-card-head"><span class="student-number">${i + 1}</span><b>${esc(x.display_name)}</b><span class="score-badge">${summaryScores.get(x.id) || "—"}/10</span></div><p>${esc(x.summary_text)}</p>${["summary_review","complete"].includes(r.phase) ? `<p class="peer-summary-stat">Peer feedback: ${d.peerQuality?.summaries.find(p=>p.summaryId===x.id)?.average?.toFixed(2) ?? "—"}/4 · ${d.peerQuality?.summaries.find(p=>p.summaryId===x.id)?.received ?? 0} of ${d.peerQuality?.summaries.find(p=>p.summaryId===x.id)?.expected ?? 0} reviews received</p>` : ""}<label><span>SCORE <output>${summaryScores.get(x.id) || "—"}</output></span><input type="range" min="1" max="10" value="${summaryScores.get(x.id) || 5}" data-summary-score="${x.id}"></label></article>`).join("") || '<div class="empty-state">No summaries yet.</div>'}</div></section>`
+        ? `<section class="card response-board"><div class="row heading-row"><div><span class="section-label">FINAL RESPONSES</span><h2>Final responses &amp; teacher grades</h2><p class="muted">Teacher grades use the 1–10 scale and remain separate from peer feedback.</p></div><div class="score-release-actions"><span class="pill">${summaryReleased ? "SCORES RELEASED" : "SCORES HIDDEN"}</span><button class="btn secondary" id="releaseSummaryScores" ${scoredSummaries.length ? "" : "disabled"}>${summaryReleased ? "Unrelease scores" : "Release scores"}</button></div></div>${summaryGuide(r)}<div class="response-score-grid">${d.summaries.map((x, i) => `<article class="score-row"><div class="student-card-head"><span class="student-number">${i + 1}</span><b>${esc(x.display_name)}</b><span class="score-badge">${summaryScores.get(x.id) || "—"}/10</span></div><p>${esc(x.summary_text)}</p>${["summary_review","complete"].includes(r.phase) ? `<p class="peer-summary-stat">Peer feedback: ${d.peerQuality?.summaries.find(p=>p.summaryId===x.id)?.average?.toFixed(2) ?? "—"}/4 · ${d.peerQuality?.summaries.find(p=>p.summaryId===x.id)?.received ?? 0} of ${d.peerQuality?.summaries.find(p=>p.summaryId===x.id)?.expected ?? 0} reviews received</p>` : ""}<label><span>SCORE <output>${summaryScores.get(x.id) || "—"}</output></span><input type="range" min="1" max="10" value="${summaryScores.get(x.id) || 5}" data-summary-score="${x.id}"></label></article>`).join("") || '<div class="empty-state">No summaries yet.</div>'}</div></section>`
         : "";
       const phaseTitle = {
         lobby: "Invite students",
@@ -1404,12 +1461,12 @@ async function teacherPageV3(id) {
         voting: "Battle Royale voting",
         results: "45-second Think · Pair · Share",
         sharing: "Two students share",
-        summary: "Final summary from memory",
+        summary: "Final paragraph",
         summary_review: "Anonymous peer ratings",
         complete: "ParaFLY complete",
       }[r.phase];
       setPage(
-        `<p id="teacherConnectionNotice" class="error" role="status" hidden></p><section class="session-card"><button class="join-code" id="copyCode" title="Copy class code">${esc(r.joinCode)}</button><div class="session-copy"><span class="section-label">PARAFLY LIVE</span><h1>${esc(r.title)}</h1><p>${d.students.length} joined · ${isSummaryPhase ? d.summaries.length : roundResponses.length} sent · Passage ${Math.max(1, r.currentRound + 1)} of ${r.paragraphCount}</p></div><div class="session-actions"><label class="nickname-toggle" title="Switch teacher-facing student labels between real names and assigned nicknames"><input id="showNicknames" type="checkbox" ${r.hideIdentities ? "checked" : ""}><span class="toggle-track"></span><b>Show nicknames</b></label><button class="btn secondary" id="exportGrades">Export answers &amp; grades</button><button class="btn secondary" id="copyJoin">Copy student link</button><button class="btn secondary" id="projectJoin">Project join screen</button>${controls}</div></section>${roundBar(r)}<div class="teacher-stage"><section class="card current-step"><span class="section-label">CURRENT STEP</span><h2>${phaseTitle}</h2>${r.currentRound >= 0 && !["summary", "summary_review", "complete"].includes(r.phase) ? `<div class="passage">${esc(r.paragraphs[r.currentRound])}</div>` : ""}${isSummaryPhase ? summaryGuide() : criteriaGuide()}</section><aside class="gauge-panel">${["summary_review","complete"].includes(r.phase) ? peerDashboard(d.peerQuality, r.phase === "complete") : gaugeMarkup(average, activeScored.length)}</aside></div>${timerPanel}${votingPanel}${sharerPanel}${releaseReminder}${scorePanel}${summaryPanel}<section class="card roster-card"><h2>Student status</h2><div class="status-list">${d.students.map((x) => `<span class="student-chip ${(isSummaryPhase ? d.summaries.some((s) => s.student_id === x.id) : submittedIds.has(x.id)) ? "done" : ""}">${esc(x.display_name)} ${(isSummaryPhase ? d.summaries.some((s) => s.student_id === x.id) : submittedIds.has(x.id)) ? "✓" : ""}</span>`).join("") || "No students yet."}</div></section><dialog id="joinDialog" class="app-dialog projector-dialog"><button class="dialog-close" id="closeJoin" aria-label="Close">×</button><div class="projector-content"><span class="section-label">JOIN CODE</span><div class="project-code">${esc(r.joinCode)}</div><img class="join-qr" src="${d.qrDataUrl}" alt="QR code for the student join link"><p>Scan the QR code, or open:</p><h2 class="join-url">${esc(d.joinUrl)}</h2><button class="btn secondary" id="fullscreenJoin">Fullscreen</button></div></dialog>`,
+        `<p id="teacherConnectionNotice" class="error" role="status" hidden></p><section class="session-card"><button class="join-code" id="copyCode" title="Copy class code">${esc(r.joinCode)}</button><div class="session-copy"><span class="section-label">PARAFLY LIVE</span><h1>${esc(r.title)}</h1><p>${d.students.length} joined · ${isSummaryPhase ? d.summaries.length : roundResponses.length} sent · Passage ${Math.max(1, r.currentRound + 1)} of ${r.paragraphCount}</p></div><div class="session-actions"><label class="nickname-toggle" title="Switch teacher-facing student labels between real names and assigned nicknames"><input id="showNicknames" type="checkbox" ${r.hideIdentities ? "checked" : ""}><span class="toggle-track"></span><b>Show nicknames</b></label><button class="btn secondary" id="exportGrades">Export answers &amp; grades</button><button class="btn secondary" id="copyJoin">Copy student link</button><button class="btn secondary" id="projectJoin">Project join screen</button>${controls}</div></section>${roundBar(r)}${dbqBanner(r)}<div class="teacher-stage"><section class="card current-step"><span class="section-label">CURRENT STEP</span><h2>${phaseTitle}</h2>${r.currentRound >= 0 && !["writing", "review", "summary", "summary_review", "complete"].includes(r.phase) ? `<div class="passage">${esc(r.paragraphs[r.currentRound])}</div>` : ""}${isSummaryPhase ? summaryGuide(r) : criteriaGuide()}</section><aside class="gauge-panel">${["summary_review","complete"].includes(r.phase) ? peerDashboard(d.peerQuality, r.phase === "complete") : gaugeMarkup(average, activeScored.length)}</aside></div>${timerPanel}${votingPanel}${winnerPanel}${sharerPanel}${releaseReminder}${scorePanel}${summaryPanel}<section class="card roster-card"><h2>Student status</h2><div class="status-list">${d.students.map((x) => `<span class="student-chip ${(isSummaryPhase ? d.summaries.some((s) => s.student_id === x.id) : submittedIds.has(x.id)) ? "done" : ""}">${esc(x.display_name)} ${(isSummaryPhase ? d.summaries.some((s) => s.student_id === x.id) : submittedIds.has(x.id)) ? "✓" : ""}</span>`).join("") || "No students yet."}</div></section><dialog id="joinDialog" class="app-dialog projector-dialog"><button class="dialog-close" id="closeJoin" aria-label="Close">×</button><div class="projector-content"><span class="section-label">JOIN CODE</span><div class="project-code">${esc(r.joinCode)}</div><img class="join-qr" src="${d.qrDataUrl}" alt="QR code for the student join link"><p>Scan the QR code, or open:</p><h2 class="join-url">${esc(d.joinUrl)}</h2><button class="btn secondary" id="fullscreenJoin">Fullscreen</button></div></dialog>`,
       );
       document.querySelectorAll("[data-action]").forEach(
         (b) =>
@@ -1577,6 +1634,7 @@ async function teacherPageV3(id) {
 }
 
 function render() {
+  document.getElementById("teacherPassageReference")?.remove();
   app.onpointerdown = null;
   app.onfocusin = null;
   teacherInteraction = false;

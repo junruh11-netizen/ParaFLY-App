@@ -6,6 +6,7 @@ import QRCode from "qrcode";
 import {
   assignSummaryReviews,
   qualityStats,
+  finalTaskSettings,
   cleanCode,
   cleanNickname,
   csvCell,
@@ -121,6 +122,11 @@ CREATE TABLE IF NOT EXISTS parafly_ai_usage (
  room_id INTEGER NOT NULL REFERENCES parafly_rooms(id) ON DELETE CASCADE,
  checks INTEGER NOT NULL DEFAULT 0, last_checked_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+ALTER TABLE parafly_rooms ADD COLUMN IF NOT EXISTS paragraph_type TEXT NOT NULL DEFAULT 'summary';
+ALTER TABLE parafly_rooms ADD COLUMN IF NOT EXISTS perspective TEXT NOT NULL DEFAULT 'none';
+ALTER TABLE parafly_rooms ADD COLUMN IF NOT EXISTS dbq_enabled BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE parafly_rooms ADD COLUMN IF NOT EXISTS dbq_question TEXT NOT NULL DEFAULT '';
+ALTER TABLE parafly_rooms ADD COLUMN IF NOT EXISTS final_prompt TEXT NOT NULL DEFAULT '';
 ALTER TABLE parafly_rooms ADD COLUMN IF NOT EXISTS feedback_mode TEXT NOT NULL DEFAULT 'class_vote';
 ALTER TABLE parafly_rooms ADD COLUMN IF NOT EXISTS teacher_feedback TEXT NOT NULL DEFAULT '';
 ALTER TABLE parafly_rooms ADD COLUMN IF NOT EXISTS model_response_id INTEGER;
@@ -313,6 +319,8 @@ app.post("/api/rooms", async (req, res, next) => {
     const wordLimit = body.wordLimit
       ? Math.min(500, Math.max(5, Number(body.wordLimit)))
       : null;
+    let task;
+    try { task = finalTaskSettings(body); } catch(error) { return fail(res,400,error.message); }
     const feedbackMode = "class_vote";
     const aiFactCheck = false;
     let joinCode = cleanCode(body.joinCode);
@@ -327,8 +335,8 @@ app.post("/api/rooms", async (req, res, next) => {
       joinCode = crypto.randomBytes(3).toString("hex").toUpperCase();
     const token = crypto.randomUUID();
     const result = await one(
-      `INSERT INTO parafly_rooms(title,directions,paragraphs,join_code,teacher_token,seconds_per_round,word_limit,feedback_mode,ai_fact_check,identity_mode,hide_identities)
-    VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,'names',FALSE) RETURNING *`,
+      `INSERT INTO parafly_rooms(title,directions,paragraphs,join_code,teacher_token,seconds_per_round,word_limit,feedback_mode,ai_fact_check,identity_mode,hide_identities,paragraph_type,perspective,dbq_enabled,dbq_question,final_prompt)
+    VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,'names',FALSE,$10,$11,$12,$13,$14) RETURNING *`,
       [
         title,
         directions,
@@ -339,6 +347,7 @@ app.post("/api/rooms", async (req, res, next) => {
         wordLimit,
         feedbackMode,
         aiFactCheck,
+        task.paragraphType, task.perspective, task.dbqEnabled, task.dbqQuestion, task.finalPrompt,
       ],
     );
     res.status(201).json({ ...publicRoom(result), teacherToken: token });
@@ -586,17 +595,17 @@ app.post("/api/rooms/:id/summary", roomWrite(async (req, res, next) => {
       return fail(res, 409, "The final summary is not open");
     if (!matchesStep(req, res, room)) return;
     const text = String(body.summary ?? "").trim();
-    if (body.includesThreeFacts !== true)
+    if (room.paragraph_type === "narrative" && !room.dbq_enabled ? body.confirmedRequirements !== true : body.includesThreeFacts !== true)
       return fail(
         res,
         400,
-        "Confirm that your summary includes at least three facts",
+        "Confirm that your final paragraph meets the displayed requirements",
       );
     if (text.length < 20 || text.length > 5000)
       return fail(
         res,
         400,
-        "Write a complete summary containing at least three facts",
+        "Write a final paragraph between 20 and 5,000 characters",
       );
     let aiStatus = "not_used",
       aiFactCount = null,
@@ -1226,7 +1235,7 @@ app.get("/api/rooms/:id/export", async (req, res, next) => {
         [r.nickname, `Passage ${r.round_index + 1}`, r.response_text, r.score, r.score == null ? "Ungraded" : "Graded", "", ""].map(csvCell).join(","),
       ),
       ...summaries.map((x) =>
-        [x.nickname, "Final Summary", x.summary_text, x.score, x.score == null ? "Ungraded" : "Graded", peer.summaries.find(p=>p.summaryId===x.id)?.average?.toFixed(2) ?? "", peer.summaries.find(p=>p.summaryId===x.id)?.received ?? 0].map(csvCell).join(","),
+        [x.nickname, room.dbq_enabled ? "DBQ response" : room.paragraph_type && room.paragraph_type !== "summary" ? "Final paragraph" : "Final Summary", x.summary_text, x.score, x.score == null ? "Ungraded" : "Graded", peer.summaries.find(p=>p.summaryId===x.id)?.average?.toFixed(2) ?? "", peer.summaries.find(p=>p.summaryId===x.id)?.received ?? 0].map(csvCell).join(","),
       ),
     ].join("\r\n");
     res.type("text/csv; charset=utf-8").attachment("parafly-answers-and-grades.csv").send("\uFEFF" + csv);

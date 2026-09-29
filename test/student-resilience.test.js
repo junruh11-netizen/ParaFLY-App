@@ -89,3 +89,10 @@ test('unsubmit restores submitted passage and summary text even without a local 
  assert.equal(h.w.document.getElementById('summaryAnswer').value,'My complete submitted summary with three facts.');
  assert.equal(h.w.document.getElementById('threeFacts').checked,true);h.close();
 });
+test('DBQ question stays visible across phases; final-only requirements do not affect paraphrasing',async()=>{
+ const h=await setup();Object.assign(h.state.room,{dbqEnabled:true,dbqQuestion:'Why did the disagreement create political parties?',paragraphType:'narrative',perspective:'third'});
+ // Trigger a fresh round snapshot; real settings are immutable for the room.
+ h.state.room.currentRound=1;await h.poll();assert.match(h.w.document.querySelector('.dbq-question').textContent,/political parties/);assert.equal(h.w.document.querySelector('.task-badge'),null);
+ h.state.room.phase='summary';h.state.paragraph=null;await h.poll();assert.match(h.w.document.querySelector('.task-badge').textContent,/DBQ response · Third person/);assert.match(h.w.document.querySelector('.quality-guide').textContent,/Answers the question correctly with at least three accurate facts/);assert.match(h.w.document.querySelector('.quality-guide').textContent,/third person/);assert.equal(h.w.document.querySelector('.passage'),null);
+ h.state.room.phase='summary_review';h.state.peerReviews=[{summary_id:3,score:null,summary_text:'A peer response'}];await h.poll();assert.match(h.w.document.querySelector('.dbq-question').textContent,/political parties/);assert.match(h.w.document.querySelector('.quality-options').textContent,/Answers the question correctly/);h.close();
+});

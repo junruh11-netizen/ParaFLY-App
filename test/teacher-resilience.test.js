@@ -84,3 +84,19 @@ test('summary peer average updates live while teacher grades remain separate',as
  assert.equal(el(h,'[data-summary-score="1"]').value,'9');
  assert.match(el(h,'.peer-summary-stat').textContent,/3.50\/4/);h.close();
 });
+test('floating source remains open, expanded and scrolled through grading refreshes',async()=>{
+ const h=await setup();const ref=el(h,'#teacherPassageReference'),panel=el(h,'#originalPassagePanel');
+ assert.equal(panel.hidden,true);el(h,'.passage-fab').click();el(h,'#expandReference').click();
+ const text=el(h,'.reference-text');text.scrollTop=80;
+ h.state.students.push({id:1,display_name:'Student'});h.state.responses.push({id:1,student_id:1,round_index:0,display_name:'Student',response_text:'A response'});await h.poll();
+ assert.equal(el(h,'#teacherPassageReference'),ref);assert.equal(panel.hidden,false);assert.ok(panel.classList.contains('maximized'));assert.equal(text.scrollTop,80);
+ const slider=el(h,'[data-score="1"]');slider.value='8';slider.dispatchEvent(new h.w.Event('input'));slider.dispatchEvent(new h.w.Event('change'));await h.flush();await h.poll();assert.equal(h.state.scores[0].score,8);assert.equal(panel.hidden,false);
+ h.state.room.currentRound=1;await h.poll();assert.equal(text.textContent,'Second passage');assert.equal(text.scrollTop,0);
+ el(h,'.passage-fab').click();assert.equal(panel.hidden,true);
+ h.state.room.phase='summary';await h.poll();assert.equal(ref.hidden,true);h.close();
+});
+test('winning paragraph stays on teacher dashboard during TPS and random sharing',async()=>{
+ const h=await setup();h.state.students=[{id:1,display_name:'One'},{id:2,display_name:'Two'}];h.state.responses=[{id:21,student_id:1,round_index:0,display_name:'One',response_text:'The winning paragraph in full.'}];
+ h.state.room.modelResponseId=21;h.state.room.phase='results';await h.poll();assert.match(el(h,'.winner-panel').textContent,/The winning paragraph in full/);
+ h.state.room.phase='sharing';h.state.room.shareStudentIds=[1,2];await h.poll();assert.match(el(h,'.winner-panel').textContent,/The winning paragraph in full/);assert.match(el(h,'.selected-sharers').textContent,/One and Two/);h.close();
+});

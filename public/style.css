@@ -1858,3 +1858,19 @@ select:focus {
 .peer-dashboard h2 small { font-size: 1.2rem; }
 .peer-dashboard progress { width: 100%; accent-color: #42623c; }
 .peer-summary-stat { background: #f2f7ef; padding: .7rem; border-radius: 8px; }
+
+.final-task-fields { display:grid; grid-template-columns:1fr 1fr; gap:18px; }
+.final-task-fields select { width:100%; border:1px solid #cdd9d0; border-radius:10px; padding:12px; background:white; font:inherit; }
+.final-task-setup .nickname-toggle { margin:16px 0; }
+.dbq-question { border-left:5px solid #edb757; }
+.dbq-question p { font-size:1.12rem; margin:.5rem 0 0; white-space:pre-wrap; }
+.task-badge { display:inline-block; background:#e8f3e8; border-radius:10px; padding:8px 12px; }
+.final-prompt p,.winner-panel .passage { white-space:pre-wrap; }
+#teacherPassageReference[hidden],.original-passage-panel[hidden],.field[hidden] { display:none !important; }
+.passage-fab { position:fixed; bottom:22px; right:22px; z-index:51; width:54px; height:54px; border-radius:50%; border:2px solid white; color:white; background:#315945; display:grid; place-items:center; box-shadow:0 4px 18px #20352b40; cursor:pointer; }
+.original-passage-panel { position:fixed; bottom:88px; right:22px; z-index:50; width:min(440px,40vw); height:42vh; background:#fffdf7; border:1px solid #d5dcd0; border-radius:16px; box-shadow:0 8px 35px #20352b33; display:flex; flex-direction:column; overflow:hidden; }
+.reference-header { display:flex; align-items:center; justify-content:space-between; padding:12px 16px; gap:10px; background:#e8f3e8; }
+.reference-header button { border:1px solid #b5c9b7; background:white; border-radius:8px; padding:7px; cursor:pointer; }
+.reference-text { padding:18px; overflow:auto; white-space:pre-wrap; line-height:1.65; font-family:Georgia,serif; flex:1; min-height:0; }
+.original-passage-panel.maximized { width:min(1000px,calc(100vw - 44px)); height:78vh; }
+@media(max-width:650px) { .final-task-fields { grid-template-columns:1fr; } .original-passage-panel { width:calc(100vw - 32px); right:16px; height:45vh; } .original-passage-panel.maximized { width:calc(100vw - 32px); height:78vh; } }
